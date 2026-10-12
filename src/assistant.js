@@ -1,7 +1,7 @@
 /* Independent implementation. No GPT PRO code or runtime bridge is used. */
 var PaperWebAssistant = (() => {
   const ID='paper-web-assistant@local.customization', PREF='extensions.paperWebAssistant.', HTML='http://www.w3.org/1999/xhtml';
-  const WEB_BUILD='20261012-share-r11';
+  const WEB_BUILD='20261012-bounded-analysis-r13';
   const panels=new Map(), injected=new Set(), readers=new Map(), workspaces=new Map();
   let chromeHandle, paneID, timer, commands=[], defaults=[], running=false, activeRun=null, uiCSS='', sessionSerial=0;
   const get=(k,d)=>{try{return Zotero.Prefs.get(PREF+k,true)??d;}catch(_){return d;}};
@@ -133,7 +133,7 @@ var PaperWebAssistant = (() => {
     }
     if(scope==='related')return retrieve(s,question,true);
     if(scope==='library')return retrieve(s,question,false);
-    if(scope==='items'){
+    if(scope==='items'||scope==='abstract'){
       const papers=list.map(root).filter(i=>i?.isRegularItem?.()&&!i.deleted);
       if(!papers.length)return list.map(meta).join('\n\n');
       const evidence=await PaperLibraryTools.prepareMaterials(papers,{maxItems:Infinity,isCancelled:()=>!!activeRun?.cancelled,onProgress:p=>status(s,'正在准备文献材料 '+p.completed+'/'+p.total+'…')});
@@ -222,9 +222,13 @@ var PaperWebAssistant = (() => {
     if(activeRun?.s===s&&activeRun.cancelled&&name!=='Cancel')throw new Error('任务已停止。');
     return actor(s).sendQuery('PaperWeb:'+name,data);
   }
+  async function inputBudget(s){
+    try{const limits=await actor(s).sendQuery('PaperWeb:InputLimits',{});s.inputLimits=limits;return limits.maxLength>0?Math.min(limits.maxLength,PaperLongText.limit):PaperLongText.limit;}
+    catch(_){return PaperLongText.limit;}
+  }
   async function ask(s,text,wait=true,retry=0) {
     if(!text.trim())throw new Error('请填写问题或选择快捷指令。');
-    if(text.length>220000)throw new Error('文本共 '+text.length+' 字，超过一次输入上限。请选择页码范围或上传 PDF。');
+    if(text.length>PaperLongText.limit)throw new Error('本批输入超过插件的 '+PaperLongText.limit+' 字符预算，尚未发送。请使用自动分批的发送操作。');
     // Initial project verification has its own bounded wait. It must finish
     // before the short input timeout starts, including the first full-PDF batch.
     await ensureSession(s);
@@ -321,13 +325,17 @@ var PaperWebAssistant = (() => {
       if(activeRun?.cancelled)return;
       const prompt=(generalCommand(c)?'这是一次新的通用任务。仅处理下面本次提供的文献，之前对话中的其他论文不属于本次选择。\n\n':'')+compile(c,content,q);
       s.lastPrompt=prompt;s.lastTarget=target;s.lastCapture=captured;s.lastCommand=c;
-      if(options.draft){await query(s,'Draft',{text:prompt});status(s,'已填入网页，可检查后发送。');return;}
+      if(options.draft){if(prompt.length>PaperLongText.limit)throw new Error('材料较长，请点击发送进行自动分批；填入不会自动发送多批内容。');await query(s,'Draft',{text:prompt});status(s,'已填入网页，可检查后发送。');return;}
       status(s,'正在准备「'+s.sessionTitle+'」的本次操作…');
-      const answer=translationBody(await ask(s,prompt),c);s.lastAnswer=answer;
+      const render=value=>(generalCommand(c)?'这是一次新的通用任务。仅处理本次材料，之前的其他论文不属于本次选择。\n\n':'')+compile(c,value,q);
+      let answer;
+      try{answer=translationBody(await PaperLongText.execute({content,render,maxChars:await inputBudget(s),ask:text=>ask(s,text),check:()=>{if(activeRun?.cancelled)throw new Error('任务已停止。');sessionGuard(s,s.sessionToken);},progress:label=>{s.translationBatchLabel=label;if(label)status(s,label);},kind:scope==='outline'?'outline':scope==='autoAnnotations'?'annotations':/翻译|translate/i.test(c.name)?'translation':'text'}),c);}finally{delete s.translationBatchLabel;}
+      s.lastAnswer=answer;
       if(activeRun?.cancelled)return;
       if(scope==='outline')renderOutline(s,answer);
+      if(prompt.length>PaperLongText.limit&&/翻译|translate/i.test(c.name)){s.result.replaceChildren(el(s.doc,'strong','分批译文汇总'),el(s.doc,'p',answer));s.result.hidden=false;}
       if(scope==='autoAnnotations')await applyAnnotations(s,answer,captured?.reader||s.taskReader||reader());
-      const write=options.write||s.write.value;
+      const write=options.write||(scope==='abstract'&&['append','replace'].includes(s.write.value)&&!captured?'answer':s.write.value);
       if(write==='note')await saveNote(s,answer,c.name,target);
       else if(write==='append'||write==='replace')await writeAnnotation(captured,answer,write);
       status(s,(write==='append'||write==='replace'?'已将网页回复写入标注。':'回复已完成，直接显示在下方网页。')+(s.namingWarning?' '+s.namingWarning:'')+(s.materialNotice?'\n'+s.materialNotice:''));
@@ -357,7 +365,8 @@ var PaperWebAssistant = (() => {
       if(!available.length)throw new Error('所选文献没有可用于生成的摘要或 PDF 原文。\n'+PaperLibraryTools.materialNotice(evidence));
       const prompt=PaperLibraryTools.prompt(kind,available,evidence.materials);
       status(s,'正在为 '+available.length+'/'+evidence.total+' 篇文献生成'+(kind==='tags'?'标签…':'简记…')+(evidence.skipped.length?'（跳过 '+evidence.skipped.length+' 篇）':''));
-      const answer=await ask(s,prompt);if(activeRun?.cancelled)return;
+      const firstLine=prompt.slice(0,prompt.indexOf('\n')),material=prompt.slice(prompt.indexOf('\n')+1);
+      let answer;try{answer=await PaperLongText.execute({content:material,render:value=>firstLine+'\n'+value,maxChars:await inputBudget(s),ask:text=>ask(s,text),check:()=>{if(activeRun?.cancelled)throw new Error('任务已停止。');},progress:label=>{s.translationBatchLabel=label;}});}finally{delete s.translationBatchLabel;}if(activeRun?.cancelled)return;
       s.lastAnswer=answer;const rows=PaperLibraryTools.parseAI(answer,kind,available);
       const previousTags=new Map(available.map(i=>[i.id,new Set(i.getTags().map(t=>t.tag))]));
       const count=await PaperLibraryTools.applyAI(kind,rows,available);
@@ -888,7 +897,7 @@ var PaperWebAssistant = (() => {
     const top=el(doc,'div');top.className='pwa-heading';header.append(top);
     top.append(el(doc,'strong','阅读设置'));
     s.paperTitle=el(doc,'div');s.paperTitle.className='pwa-paper';paper.append(s.paperTitle);
-    s.sessionInfo=el(doc,'div');s.sessionInfo.className='pwa-session';paper.append(s.sessionInfo);
+    s.sessionInfo=el(doc,'div');s.sessionInfo.className='pwa-session';
     const field=(parent,label,input)=>{const box=el(doc,'label');box.className='pwa-field';input.setAttribute('aria-label',label);box.append(el(doc,'span',label),input);parent.append(box);return input;};
     const select=(entries)=>{const e=el(doc,'select');for(const [v,t]of entries){const o=el(doc,'option',t);o.value=v;e.append(o);}s.lockControls.push(e);return e;};
     const button=(parent,name,fn,locked=true)=>{const b=el(doc,'button',name);b.type='button';b.addEventListener('click',()=>Promise.resolve().then(fn).catch(e=>reportError(s,e)));parent.append(b);if(locked)s.lockControls.push(b);return b;};
@@ -901,7 +910,7 @@ var PaperWebAssistant = (() => {
     const grid=el(doc,'div');grid.className='pwa-fields';control.append(grid);
     s.command=select([]);s.command.className='pwa-command';s.command.hidden=true;s.command.setAttribute('aria-label','快捷指令');bar.append(s.command);
     s.commandToggle=button(bar,'翻译',()=>openCommands(s));s.commandToggle.className='pwa-command pwa-command-toggle';s.commandToggle.dataset.uiToggle='true';s.commandToggle.setAttribute('aria-haspopup','dialog');s.commandToggle.setAttribute('aria-expanded','false');
-    s.scope=field(grid,'内容来源',select([['selection','选中文段'],['page','当前页'],['pages','页码范围'],['pageImage','当前页截图'],['full','PDF 全文'],['outline','全文章节'],['autoAnnotations','全文标注'],['fullTranslation','全文逐段翻译'],['related','当前 PDF 检索'],['items','文献信息'],['annotations','全部标注'],['notes','文献笔记'],['clipboard','剪贴板'],['library','当前分类知识库'],['none','仅问题']]));
+    s.scope=field(grid,'内容来源',select([['selection','选中文段'],['page','当前页'],['pages','页码范围'],['pageImage','当前页截图'],['full','PDF 全文'],['outline','全文章节'],['autoAnnotations','全文标注'],['fullTranslation','全文逐段翻译'],['related','当前 PDF 检索'],['items','文献信息'],['abstract','论文摘要'],['annotations','全部标注'],['notes','文献笔记'],['clipboard','剪贴板'],['library','当前分类知识库'],['none','仅问题']]));
     s.barScope=s.scope.cloneNode(true);s.barScope.className='pwa-source';s.barScope.setAttribute('aria-label','内容来源');s.barScope.hidden=true;control.append(s.barScope);s.lockControls.push(s.barScope);
     s.barScope.addEventListener('change',()=>{s.scope.value=s.barScope.value;commandInfo(s);});s.scope.addEventListener('change',()=>commandInfo(s));
     s.write=field(grid,'回复保存到',select([['answer','仅网页显示'],['append','追加到标注'],['replace','替换标注译文'],['note','另存笔记']]));
@@ -956,7 +965,7 @@ var PaperWebAssistant = (() => {
     const chatLink=el(doc,'input');chatLink.type='url';chatLink.placeholder='https://chatgpt.com/…/c/…';field(recovery,'此 PDF 的聊天链接',chatLink);s.lockControls.push(chatLink);
     button(recovery,'关联当前会话',()=>{if(!s.sessionKey)throw new Error('请先选择需要关联的文献或通用操作。');s.savedSession=PaperSessions.associate(put,s.sessionKey,chatLink.value);s.creating=false;s.verifiedSession=null;sessionLabel(s);navigateSession(s,PaperSessions.project);scheduleSessionPreparation(s);status(s,'已保存「'+s.sessionTitle+'」的候选会话链接，后续操作先在项目中核实它。');});
     s.status=el(doc,'div');s.status.className='pwa-status';s.status.hidden=true;footer.append(s.status);
-    s.activity=el(doc,'div');s.activity.className='pwa-activity';s.activity.setAttribute('role','status');s.activity.setAttribute('aria-live','polite');s.root.append(s.activity);
+    s.activity=el(doc,'div');s.activity.className='pwa-activity';s.activity.setAttribute('role','status');s.activity.setAttribute('aria-live','polite');paper.append(s.activity);
     s.browser=doc.createXULElement('browser');s.browser.classList.add('pwa-browser');s.browser.setAttribute('type','content');s.browser.setAttribute('flex','1');s.browser.setAttribute('remote','false');s.browser.setAttribute('disableglobalhistory','true');s.browser.setAttribute('maychangeremoteness','true');s.browser.setAttribute('messagemanagergroup','basicViewer');s.browser.setAttribute('aria-label','此 PDF 的 ChatGPT 会话');s.root.append(s.browser);
     s.browser.addEventListener('focus',()=>{toggleOptions(s,true);s.help.hidden=true;s.helpButton.setAttribute('aria-expanded','false');});
     s.errorBox=el(doc,'section');s.errorBox.className='pwa-error';s.errorBox.hidden=true;s.errorBox.setAttribute('role','alert');
@@ -1152,6 +1161,8 @@ var PaperWebAssistant = (() => {
       defaults=JSON.parse(await Zotero.File.getResourceAsync(rootURI+'commands.json'));
       try{commands=JSON.parse(get('commands','null'))||defaults;}catch(_){commands=defaults;}
       for(const c of defaults)if(!commands.some(old=>old.name===c.name))commands.push(c);
+      const oldAbstract=commands.find(c=>c.name==='摘要总结'&&c.scope==='selection'&&c.text===defaults.find(d=>d.name==='摘要总结')?.text);
+      if(oldAbstract)Object.assign(oldAbstract,defaults.find(d=>d.name==='摘要总结'));
       const oldOutline=commands.find(c=>c.name==='AI 大纲'&&c.scope==='full'&&c.text.startsWith('按照论文实际章节，生成中文层级大纲'));
       if(oldOutline)Object.assign(oldOutline,defaults.find(c=>c.name==='AI 大纲'));
       // Defaults live in the addon; only user edits need a persisted preference.
@@ -1168,6 +1179,6 @@ var PaperWebAssistant = (() => {
     show,run,selection,context,writeAnnotation,saveNote,locate,tool,
     get commands(){return commands;},
     get panels(){return [...panels.values()];},
-    diagnostics(){return {version:'1.6.5',webBuild:WEB_BUILD,compatibility:PaperZoteroCompat.diagnostics(),paneID,commands:commands.length,panels:[...panels.values()].map(s=>({visible:!!s.body.getBoundingClientRect().height&&s.win.getComputedStyle(s.root).visibility==='visible',status:s.status.textContent,url:s.browser.currentURI?.spec})),busy:!!activeRun};}
+    diagnostics(){return {version:'1.6.6',webBuild:WEB_BUILD,compatibility:PaperZoteroCompat.diagnostics(),paneID,commands:commands.length,panels:[...panels.values()].map(s=>({visible:!!s.body.getBoundingClientRect().height&&s.win.getComputedStyle(s.root).visibility==='visible',status:s.status.textContent,url:s.browser.currentURI?.spec})),busy:!!activeRun};}
   };
 })();

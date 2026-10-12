@@ -1,4 +1,4 @@
-const PAPER_WEB_ACTOR_BUILD='20261012-share-r11';
+const PAPER_WEB_ACTOR_BUILD='20261012-bounded-analysis-r13';
 export class PaperWebChild extends JSWindowActorChild {
   async verifyProjectConversation(data){
     const doc=this.document,win=this.contentWindow,home=data.project;
@@ -348,6 +348,10 @@ export class PaperWebChild extends JSWindowActorChild {
       ready: !!input, input: input ? { tag: input.localName, id: input.id, editable: input.getAttribute("contenteditable"), empty: !(input.value || input.textContent || "").trim() } : null, answerCount: this.readAnswers().length,
       answerLengths: this.readAnswers().map(text => text.length),fileInputs:[...doc.querySelectorAll('input[type="file"]')].map(i=>({accept:i.accept,multiple:i.multiple,files:i.files.length}))
     }));
+    if(message.name==='PaperWeb:InputLimits'){
+      const declared=input?.maxLength>0?input.maxLength:Number(input?.getAttribute?.('maxlength'))||null;
+      return {available:!!input,kind:input?.localName||null,id:input?.id||null,maxLength:declared>0?declared:null,contentEditable:input?.getAttribute?.('contenteditable')||null};
+    }
     if(message.name==='PaperWeb:FocusComposer'){
       const access=this.pageAccess().access;
       if(access!=='ok'||!input)return {focused:false};
@@ -358,6 +362,7 @@ export class PaperWebChild extends JSWindowActorChild {
     if ((input.value || input.textContent || "").trim()) throw new Error("网页中已有未发送的内容，请先发送或清空它。");
     const text = String(message.data.text || "");
     if (!text.trim()) throw new Error("提示词为空。");
+    if(input.maxLength>0&&text.length>input.maxLength)throw new Error('网页输入框当前最多接受 '+input.maxLength+' 字符，本批尚未发送。');
     input.focus();
     if (input.localName === "textarea" || input.localName === "input") {
       const proto = input.localName === "textarea" ? win.HTMLTextAreaElement.prototype : win.HTMLInputElement.prototype;
@@ -371,7 +376,9 @@ export class PaperWebChild extends JSWindowActorChild {
       selection.addRange(range);
       if (!doc.execCommand("insertText", false, text)) throw new Error("网页未接受输入，请在网页中手动输入。");
     }
-    return { filled: true };
+    const actual=input.localName==='textarea'||input.localName==='input'?input.value:(input.innerText||input.textContent||'');
+    if(String(actual).replace(/\s/g,'')!==text.replace(/\s/g,''))throw new Error('网页未完整接收本批文字，本批尚未发送，请检查草稿后重试。');
+    return { filled: true, characters:text.length, maxLength:input.maxLength>0?input.maxLength:null };
   }
 }
 

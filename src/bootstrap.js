@@ -9,6 +9,7 @@ async function startup({rootURI}) {
   Services.scriptloader.loadSubScriptWithOptions(rootURI+'help.js',{target:paperScope,charset:'UTF-8',ignoreCache:true});
   Services.scriptloader.loadSubScriptWithOptions(rootURI+'library-tools.js',{target:paperScope,charset:'UTF-8',ignoreCache:true});
   Services.scriptloader.loadSubScriptWithOptions(rootURI+'library-ui.js',{target:paperScope,charset:'UTF-8',ignoreCache:true});
+  Services.scriptloader.loadSubScriptWithOptions(rootURI+'long-text.js',{target:paperScope,charset:'UTF-8',ignoreCache:true});
   Services.scriptloader.loadSubScriptWithOptions(rootURI+'paragraphs.js',{target:paperScope,charset:'UTF-8',ignoreCache:true});
   Services.scriptloader.loadSubScriptWithOptions(rootURI+'assistant.js',{target:paperScope,charset:'UTF-8',ignoreCache:true});
   await paperScope.PaperWebAssistant.start(rootURI);

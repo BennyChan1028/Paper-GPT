@@ -57,3 +57,6 @@
 .pwa-footer{padding:6px 10px;gap:0}.pwa-footer .pwa-field>span{display:none}.pwa-question{min-height:44px}
 
 @container(max-width:380px){.pwa-bar button:not(.pwa-command-toggle){font-size:12px;min-height:34px;padding:5px 6px}.pwa-bar .pwa-command-toggle{min-height:34px}}
+
+/* Title plus one live status line. Session proof remains internal. */
+.pwa-paper-context .pwa-activity{padding:0;margin-top:3px;border:0;min-height:20px;font-weight:400;background:transparent}

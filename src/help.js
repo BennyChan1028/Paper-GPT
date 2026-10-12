@@ -5,7 +5,7 @@ var PaperHelp=(()=>{
     ['解释','解释','选文与写作','用容易理解的语言解释选中文字的含义。','选中难懂的文段后发送；可在设置里补充你的问题。'],
     ['概括','概括','选文与写作','压缩选文，保留适合学术引用的核心内容。','选择要概括的文字后发送，回复显示在网页。'],
     ['改写','改写','选文与写作','改善选文的表达、清晰度和学术风格。','选中待改写的段落后发送；原文不会自动修改。'],
-    ['摘要总结','摘要总结','选文与写作','将材料整理为背景、目的、方法、结果和创新点表格。','选择包含足够研究信息的文字；未提供的信息以空缺表示。'],
+    ['摘要总结','摘要总结','分析与导出','读取论文摘要，整理背景、目的、方法、结果和创新点。','打开 PDF 或选择文献后发送，无需选中文字；摘要缺失时尝试本地 PDF 材料，未提供信息留空。'],
     ['填充笔记','填充笔记','笔记处理','读取当前文献的笔记，回答笔记中提出的问题。','当前文献需要已有笔记；回复可另存为新笔记，不自动改写旧笔记。'],
     ['续写','续写','笔记处理','基于已有文献笔记继续写作。','先为当前文献创建笔记，再发送；可在设置里说明续写方向，结果可另存笔记。'],
     ['总结','总结笔记','笔记处理','将当前文献笔记概括为 300 字以内的总结。','需要当前文献已有笔记；发送后可选择另存笔记。'],
@@ -37,7 +37,7 @@ var PaperHelp=(()=>{
     ['知识库跨论文问答','知识库跨论文问答','检索与问答','使用当前分类检索到的文献片段回答跨论文问题。','填写问题；可先建立全文索引。检索使用本地关键词匹配。'],
     ['术语解释','术语解释','选文与写作','用通俗中文解释术语，并给出具体例子。','选中术语及附近上下文后发送。']
   ];
-  const sourceNames={selection:'选中文段',notes:'文献笔记',page:'当前页',pages:'页码范围',full:'PDF 全文',pageImage:'当前页截图',related:'当前 PDF 检索',clipboard:'剪贴板',annotations:'全部标注',items:'文献信息',library:'当前分类知识库',none:'仅问题',outline:'全文章节',autoAnnotations:'全文标注',fullTranslation:'全文逐段翻译'};
+  const sourceNames={selection:'选中文段',abstract:'论文摘要',notes:'文献笔记',page:'当前页',pages:'页码范围',full:'PDF 全文',pageImage:'当前页截图',related:'当前 PDF 检索',clipboard:'剪贴板',annotations:'全部标注',items:'文献信息',library:'当前分类知识库',none:'仅问题',outline:'全文章节',autoAnnotations:'全文标注',fullTranslation:'全文逐段翻译'};
   const lookup=new Map(entries.map(([name,label,group,description,usage])=>[name,{label,group,description,usage}]));
   function info(command){return lookup.get(command?.name)||{label:command?.name||'自定义指令',group:'自定义指令',description:'使用你保存的提示词处理所选材料。',usage:'检查内容来源与提示词；可在设置 → 提示词设置中编辑。'};}
   function width(commands,measure){return Math.ceil(Math.max(126,Math.min(280,Math.max(...commands.map(c=>measure(info(c).label)),84)+42)));}
