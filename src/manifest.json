@@ -1,0 +1,19 @@
+{
+  "manifest_version": 2,
+  "name": "Paper GPT",
+  "version": "1.6.5",
+  "description": "独立的 ChatGPT 网页侧栏、论文阅读、翻译、笔记和标注工具。",
+  "author": "Local customization",
+  "applications": {
+    "zotero": {
+      "id": "paper-web-assistant@local.customization",
+      "strict_min_version": "9.0",
+      "strict_max_version": "10.0.*",
+      "update_url": "https://paper-web-assistant.invalid/updates.json"
+    }
+  },
+  "icons": {
+    "48": "icon.svg",
+    "96": "icon.svg"
+  }
+}

@@ -1,0 +1,177 @@
+[
+  {
+    "name": "翻译",
+    "scope": "selection",
+    "text": "用学术的语言翻译这段文字，请直接输出翻译结果。"
+  },
+  {
+    "name": "解释",
+    "scope": "selection",
+    "text": "阅读这段文字，分析它所属的科研领域，扮演一位对该领域精通的专家，现在你面对一位初次接触该领域的学者，他对这段文字并不是很理解，请你用通俗的语言解释这段话，让学者能够理解。解释时候，也尽可能用比较学术的语言。输出文字时候适当使用markdown语法，让文字更清晰易读。请直接解释，不要回答文字所属领域，也不要重复你是一位专家之类的话："
+  },
+  {
+    "name": "概括",
+    "scope": "selection",
+    "text": "现在我在撰写学术论文，想引用这段文字，但它内容太长，现需要你尽可能概括这段文字，概括后的文字表达要准确，简洁。"
+  },
+  {
+    "name": "改写",
+    "scope": "selection",
+    "text": "改写这段文字（专有名词、特殊表达除外），要符合学术风格，适当改进拼写、清晰度、简洁性和整体可读性。必要时，重写整个句子。改写后的结果为："
+  },
+  {
+    "name": "摘要总结",
+    "scope": "selection",
+    "text": "根据上述内容填充下列表格 (如未提及请用\"-\"表示，输出为markdown表格)：\n\n|项目|内容|\n|--|--|\n|📖研究背景| |\n|🎯研究目的| |\n|✍️研究方法| |\n|🕊️研究对象| |\n|🔍研究结论| |\n|⭐创新点| |"
+  },
+  {
+    "name": "填充笔记",
+    "scope": "notes",
+    "text": "请你找出笔记中需要回答的问题，进行回答你，用中文。"
+  },
+  {
+    "name": "续写",
+    "scope": "notes",
+    "text": "继续写作"
+  },
+  {
+    "name": "总结",
+    "scope": "notes",
+    "text": "请你对上述内容做简要总结（300字以内）"
+  },
+  {
+    "name": "提升写作",
+    "scope": "notes",
+    "text": "As an expert editor skilled in academic writing, please help improve my text in the following ways:\n1. Enhance clarity and flow\n2. Strengthen academic language and tone \n3. Improve sentence structure and transitions\n4. Fix any grammar or style issues\n5. Make vocabulary more precise and varied\n6. Use Chinese output\n\nNotion: Give the rewriting result directly, do not describe where it is rewritten, your output will be used directly to replace the original text\n\nHere is the text to improve:"
+  },
+  {
+    "name": "总结本页",
+    "scope": "page",
+    "text": "请阅读后总结本页内容，以达到读者不看原文也能知道这一页讲了什么的目的。"
+  },
+  {
+    "name": "翻译本页",
+    "scope": "page",
+    "text": "请翻译本页内容，去除干扰信息，比如页眉页脚等，翻译过程中对可能是标题的行用markdown # 开头，你本身处于markdown环境，直接输出markdown，不需要```包裹。输出为中文。"
+  },
+  {
+    "name": "部分总结",
+    "scope": "pages",
+    "text": "请阅读文献部分页面文字，然后进行总结。"
+  },
+  {
+    "name": "全文总结",
+    "scope": "full",
+    "text": "请你阅读，并作简要总结，稍后提出的问题，请根据原文作答，你的回答都必须是中文。"
+  },
+  {
+    "name": "全文翻译",
+    "scope": "fullTranslation",
+    "text": "按 PDF 原文段落翻译成简体中文，并直接保存到对应下划线标注。"
+  },
+  {
+    "name": "截图翻译",
+    "scope": "pageImage",
+    "text": "请你翻译本页为简体中文"
+  },
+  {
+    "name": "🪐AskPDF Full Text",
+    "scope": "full",
+    "text": "You are a helpful assistant. Paper's full text from PDF is below.\n\n{content}\n\nUsing the provided context information, write a comprehensive reply to the given query. \nMake sure to cite results using [number] notation after the reference. Please use the 'author(year)[number]' format when referring to the paper, such as 'Zhao (2025) [2]'.\nAnswer the question: {question}."
+  },
+  {
+    "name": "🪐AskPDF",
+    "scope": "related",
+    "text": "You are a helpful assistant. Context information is below.\n{content}\nUsing the provided context information, write a comprehensive reply to the given query. Make sure to cite results using [number] notation after the reference. If the provided context information refer to multiple subjects with the same name, write separate answers for each subject. Use prior knowledge only if the given context didn't provide enough information.\n\nAnswer the question: {question}\n\nReply in zh-CN."
+  },
+  {
+    "name": "🌟Translate",
+    "scope": "selection",
+    "text": "I want you to act as a scientific English-Chinese translator, I will provide you with some paragraphs in one language and your task is to accurately and academically translate the paragraphs only into the other language. Do not repeat the original provided paragraphs after translation. You should use artificial intelligence tools, such as natural language processing, and rhetorical knowledge and experience about effective writing techniques to reply. I'll give you my paragraphs as follows, then you translate:\n\n{content}"
+  },
+  {
+    "name": "✨Improve writing",
+    "scope": "selection",
+    "text": "Below is a paragraph from an academic paper. Polish the writing to meet the academic style, improve the spelling, grammar, clarity, concision and overall readability. When necessary, rewrite the whole sentence. Furthermore, list all modification and explain the reasons to do so in markdown table. Paragraph: \"{content}\""
+  },
+  {
+    "name": "Clipboard",
+    "scope": "clipboard",
+    "text": "This is the content in my clipboard:\n{content}\n---\n{question}"
+  },
+  {
+    "name": "Annotations",
+    "scope": "annotations",
+    "text": "These are PDF Annotation contents:\n{content}\n\nPlease answer me in the language of my question. Make sure to cite results using [number] notation after the reference. \nMy question is: {question}"
+  },
+  {
+    "name": "Selection",
+    "scope": "selection",
+    "text": "Read these content:\n{content}\n---\nAnswer me in the language of my question. This is my question: {question}"
+  },
+  {
+    "name": "Items",
+    "scope": "items",
+    "text": "These are Zotero item informations:\n{content}\n\n---\n\nPlease answer me using the lanaguage as same as my question. Make sure to cite results using [number] notation after the reference. \nMy question is: {question}"
+  },
+  {
+    "name": "📚Literature Review",
+    "scope": "items",
+    "text": "These are Zotero item informations:\n{content}\n\n---\n\nPlease read these documents and output according to the following requirements\n\n#### Require:\n\n1. **Writing the Literature Review:**\n   - Read the provided abstracts and summarize their key contributions, methodologies, findings, and limitations.\n   - Group related studies together based on themes, methods, or findings.\n   - When citing a paper, use the format: `Author Year[Reference Number]` (e.g., Zhang 2019[1]).\n   - Ensure the review is written in clear, professional, and academic language.\n\n2. **Creating a Literature Matrix:**\n   - After writing the literature review, extract key attributes of the studies (e.g., study goals, methods, datasets used, key findings, and limitations).\n   - Summarize these attributes in a table format with columns for each attribute and rows for each paper.\n   - Include a \"Common Features\" row to highlight similarities across the studies and a \"Distinctive Features\" row to outline differences.\n\n#### Output Structure:\n\n1. **Literature Review:**\n   - A synthesized paragraph or set of paragraphs summarizing the studies. \n   - Reply in zh-CN.\n\n2. **Literature Matrix:**\n   - A structured table that compares and contrasts the studies. \n   - Reply in zh-CN."
+  },
+  {
+    "name": "AskZotero",
+    "scope": "library",
+    "text": "You are a helpful assistant. Context informations are below from different papers.\n{content}\n\nUsing the provided context information come from different paragraphs in different papers, write a comprehensive reply to the given question. Make sure to cite results using [number] notation after the reference. Use the first author and year to represent the article, for example, \"Sun et al. (2020)\". If the provided context information refer to multiple subjects with the same name, write separate answers for each subject. Use prior knowledge only if the given context didn't provide enough information.\n\nAnswer this question in an unbiased, comprehensive, and scholarly tone. \nReply in zh-CN.\n\nQuestion: {question}\n\nAnswer:"
+  },
+  {
+    "name": "AskNote",
+    "scope": "notes",
+    "text": "You are a helpful assistant. Paper's note text is below.\n{content}\nAnswer this question in an unbiased, comprehensive, and scholarly tone.\nReply in zh-CN.\n\nQuestion: {question}\n\nAnswer:"
+  },
+  {
+    "name": "自由问答",
+    "scope": "none",
+    "text": "{question}"
+  },
+  {
+    "name": "AI 阅读笔记",
+    "scope": "full",
+    "text": "依据论文原文，写一份中文阅读笔记，包含研究问题、背景、方法、数据、结果、创新点、局限与后续问题。标明原文依据，不编造。"
+  },
+  {
+    "name": "AI 大纲",
+    "scope": "outline",
+    "text": "按照论文实际章节，生成可跳转的中文大纲。只输出 JSON {\"outline\":[{\"title\":\"章节标题\",\"page\":1,\"summary\":\"中文总结\"}]}。page 必须是材料中 [第 N 页] 标记的页码；只根据原文回答，保留原章节标题。"
+  },
+  {
+    "name": "全文 AI 标注",
+    "scope": "autoAnnotations",
+    "text": "找出论文中最值得标注的研究问题、方法、关键结果、创新和局限，最多 15 个。只输出 JSON {\"annotations\":[{\"quote\":\"逐字复制英文原文完整句子\",\"page\":1,\"comment\":\"中文解释、依据与意义\"}]}。quote 必须逐字来自原文且只在所标 page 页内，至少 30 字符；page 必须对应材料中的 [第 N 页]，不要编造原文句子或页码。"
+  },
+  {
+    "name": "AI 标注分析",
+    "scope": "selection",
+    "text": "请给这段原文写简明中文学术批注：解释关键术语、研究意义、论据和局限。原文没有的信息请明确说明。"
+  },
+  {
+    "name": "文献对比矩阵",
+    "scope": "full",
+    "text": "对比提供的文献，输出中文研究矩阵：文献、问题、方法、数据、指标、结论、创新与局限，并使用文献编号引用。"
+  },
+  {
+    "name": "文献鸟瞰（Canvas）",
+    "scope": "full",
+    "text": "根据提供文献生成 Obsidian Canvas JSON，只输出一个 JSON 对象 {\"nodes\":[],\"edges\":[]}。节点格式 {\"id\":\"1\",\"type\":\"text\",\"text\":\"中文内容\",\"x\":0,\"y\":0,\"width\":300,\"height\":220}；边格式 {\"id\":\"e1\",\"fromNode\":\"1\",\"toNode\":\"2\",\"label\":\"关系\"}。包含研究问题、背景、方法、数据、关键结果、局限和后续工作，按位置展开，连接有依据的关系。"
+  },
+  {
+    "name": "知识库跨论文问答",
+    "scope": "library",
+    "text": "你将收到当前 Zotero 分类检索到的材料。基于这些材料回答：{question}。请使用中文，逐项标注 [编号] 来源。材料不足时明确说明。\n\n材料：\n{content}"
+  },
+  {
+    "name": "术语解释",
+    "scope": "selection",
+    "text": "用容易理解的中文解释原文术语，给出具体例子，并区分原文结论与解释性类比。"
+  }
+]
