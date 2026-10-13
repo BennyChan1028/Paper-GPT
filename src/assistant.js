@@ -1,7 +1,7 @@
 /* Independent implementation. No GPT PRO code or runtime bridge is used. */
 var PaperWebAssistant = (() => {
   const ID='paper-web-assistant@local.customization', PREF='extensions.paperWebAssistant.', HTML='http://www.w3.org/1999/xhtml';
-  const WEB_BUILD='20261012-bounded-analysis-r13';
+  const WEB_BUILD='20261013-stability-r14';
   const panels=new Map(), injected=new Set(), readers=new Map(), workspaces=new Map();
   let chromeHandle, paneID, timer, commands=[], defaults=[], running=false, activeRun=null, uiCSS='', sessionSerial=0;
   const get=(k,d)=>{try{return Zotero.Prefs.get(PREF+k,true)??d;}catch(_){return d;}};
@@ -274,7 +274,7 @@ var PaperWebAssistant = (() => {
     const nav=r?w.document.querySelector('#zotero-context-pane-sidenav'):w.document.querySelector('#zotero-item-pane-sidenav');
     const container=nav?.container;
     if(container){container.pinnedPane=paneID;await container.render();await container.scrollToPane(paneID,'instant');}
-    for(let n=0;n<25;n++){const s=visible();if(s&&s.body.getBoundingClientRect().height){bindItem(s,r?Zotero.Items.get(r.itemID):s.item);return s;}await Zotero.Promise.delay(100);}
+    for(let n=0;n<25;n++){const s=visible();if(s&&s.body.getBoundingClientRect().height){bindItem(s,r?Zotero.Items.get(r.itemID):s.item);if(s.deferredURL)navigateSession(s,s.deferredURL);return s;}await Zotero.Promise.delay(100);}
     throw new Error('请点击右侧“Paper GPT”图标打开侧栏。');
   }
   async function writeAnnotation(capture,text,mode='append',{silent=false}={}) {
@@ -638,8 +638,10 @@ var PaperWebAssistant = (() => {
   }
   function navigateSession(s,url){
     url=url||'https://chatgpt.com/';
+    delete s.deferredURL;
     s.navigation={url,token:s.sessionToken,at:Date.now()};
     s.navigationEpoch=(s.navigationEpoch||0)+1;s.navigationRequestedAt=s.navigation.at;
+    s.navigationCount=(s.navigationCount||0)+1;
     s.browser.loadURI(Services.io.newURI(url),{triggeringPrincipal:Services.scriptSecurityManager.getSystemPrincipal()});
   }
   function sessionLabel(s){
@@ -667,7 +669,12 @@ var PaperWebAssistant = (() => {
     s.namingWarning='';s.namingDiagnostic=null;
     s.captured=null;s.quotes=[];s.lastAnswer='';s.lastTarget=null;s.lastCapture=null;s.lastCommand=null;s.agentLog=[];
     if(s.result){s.result.hidden=true;s.result.replaceChildren();}
-    sessionLabel(s);s.labelTitle=s.sessionTitle;navigateSession(s,PaperSessions.project);scheduleSessionPreparation(s);
+    sessionLabel(s);s.labelTitle=s.sessionTitle;
+    // Connector imports can initialize collapsed item sections. Their web page
+    // belongs to an explicit panel opening, not to a metadata selection change.
+    if(s.busy||(panelVisible(s)&&reader()?.itemID===item?.id))navigateSession(s,PaperSessions.project);
+    else s.deferredURL=PaperSessions.project||'https://chatgpt.com/';
+    scheduleSessionPreparation(s);
     if(!PaperSessions.project){status(s,'请先在设置 → 新手引导 / 基础配置中登录自己的账号并保存项目主页链接。');return;}
     status(s,s.savedSession?'已打开项目，正在空闲时提前核实「'+s.sessionTitle+'」是否存在。':PaperSessions.pending(get,key)?'已发送过内容，但会话地址尚未记录。请在设置中关联已有会话后继续。':s.workspace&&!item?'可直接提问，或选择文献查看期刊评级、生成标签与简记。':'已打开项目，正在空闲时提前核实并准备「'+s.sessionTitle+'」。');
   }
@@ -745,10 +752,12 @@ var PaperWebAssistant = (() => {
     if(PaperSessions.remember(get,put,s,state))sessionLabel(s);
   }
   function scheduleSessionPreparation(s){
-    if(!PaperSessions.project||!running||!s.sessionKey||s.sessionMode==='general'||s.backgroundTimer||s.backgroundCheck||s.backgroundAttempt===s.sessionToken||s.ensuringSession||activeRun||s.busy)return;
-    const current=reader();if(current&&s.item?.id!==current.itemID)return;
+    if(!PaperSessions.project||!running||!panelVisible(s)||!s.sessionKey||s.sessionMode==='general'||s.backgroundTimer||s.backgroundCheck||s.backgroundAttempt===s.sessionToken||s.ensuringSession||activeRun||s.busy)return;
+    // Background preparation belongs to the active PDF, never a library import.
+    const current=reader();if(!current||s.item?.id!==current.itemID)return;
+    if([...panels.values()].some(p=>p!==s&&(p.backgroundTimer||p.backgroundCheck)))return;
     const token=s.sessionToken;
-    s.backgroundTimer=s.win.setTimeout(()=>{delete s.backgroundTimer;if(token===s.sessionToken&&!activeRun&&!s.busy)prepareSession(s);},700);
+    s.backgroundTimer=s.win.setTimeout(()=>{delete s.backgroundTimer;if(running&&panelVisible(s)&&token===s.sessionToken&&!activeRun&&!s.busy)prepareSession(s);},700);
   }
   async function prepareSession(s){
     if(!PaperSessions.project)return;
@@ -770,6 +779,7 @@ var PaperWebAssistant = (() => {
     try{return await checking;}finally{if(s.ensuringSession===checking)delete s.ensuringSession;}
   }
   function sessionGuard(s,token){
+    if(s.disposed)throw new Error('侧栏已关闭，后台任务已停止。');
     if(s.body?.isConnected===false)throw new Error('侧栏已关闭，请重新打开后运行操作。本次内容尚未发送。');
     if(token!==s.sessionToken)throw new Error('文献已切换，请重新运行操作。');
     if(activeRun?.s===s&&activeRun.cancelled)throw new Error('任务已停止。');
@@ -1045,6 +1055,28 @@ var PaperWebAssistant = (() => {
     workspace.win.document.getElementById('zotero-layout-switcher')?.removeAttribute('data-paper-gpt-open');
     workspace.button.setAttribute('aria-expanded','false');workspace.button.focus();
   }
+  function panelVisible(s){
+    try{if(!s||s.disposed||!s.body.isConnected||s.body.hidden||s.win.closed)return false;const r=s.body.getBoundingClientRect();return r.width>0&&r.height>0&&(!Number.isFinite(r.top)||r.bottom>0&&r.top<s.win.innerHeight&&r.right>0&&r.left<s.win.innerWidth)&&s.win.getComputedStyle(s.body).visibility!=='hidden';}catch(_){return false;}
+  }
+  function disposePanel(s){
+    if(!s||s.disposed)return;
+    s.disposed=true;s.sessionToken=null;
+    if(s.backgroundTimer){s.win.clearTimeout(s.backgroundTimer);delete s.backgroundTimer;}
+    if(activeRun?.s===s)activeRun.cancelled=true;
+    try{s.browser?.browsingContext?.currentWindowGlobal?.getActor('PaperWeb')?.sendQuery('PaperWeb:Cancel').catch(()=>{});}catch(_){}
+    try{s.libraryUnsubscribe?.();}catch(_){}s.libraryUnsubscribe=null;
+    s.captured=null;s.lastCapture=null;s.taskItems=null;s.pendingItem=null;
+    s.questionDrafts?.clear();s.quotes=[];s.agentLog=[];
+    try{s.browser?.remove();s.root?.remove();}catch(_){}panels.delete(s.body);
+  }
+  function pauseBackground(s){
+    if(s.backgroundTimer){s.win.clearTimeout(s.backgroundTimer);delete s.backgroundTimer;}
+    if(s.backgroundCheck&&!s.busy&&!s.ensuringSession&&s.backgroundToken===s.sessionToken){
+      s.sessionToken=String(s.sessionKey)+':'+(++sessionSerial)+':'+Date.now();
+      s.backgroundAttempt=null;s.verifiedSession=null;s.preparedInventory=null;
+      try{actor(s).sendQuery('PaperWeb:Cancel').catch(()=>{});}catch(_){}
+    }
+  }
   function addMainEntry(win){
     const doc=win.document,toolbar=doc.getElementById('zotero-items-toolbar'),layout=doc.getElementById('zotero-layout-switcher');
     if(!toolbar||!layout||doc.getElementById('paper-gpt-library-button'))return;
@@ -1078,17 +1110,19 @@ var PaperWebAssistant = (() => {
     workspace.body.hidden=false;workspace.splitter.hidden=false;workspace.button.setAttribute('aria-expanded','true');
     win.document.getElementById('zotero-layout-switcher').setAttribute('data-paper-gpt-open','true');
     mount({doc:win.document,body:workspace.body,item:workspaceItem(win)});
-    const s=panels.get(workspace.body);s.question.focus();return s;
+    const s=panels.get(workspace.body);if(s.deferredURL)navigateSession(s,s.deferredURL);s.question.focus();return s;
   }
   function scan() {
     if(!running)return;
+    // Dispose first: never schedule work against a detached reader/document.
+    for(const [body,s]of panels)if(!body.isConnected||s.win.closed)disposePanel(s);
     const currentReader=reader(),currentPDF=currentReader?Zotero.Items.get(currentReader.itemID):null;
     for(const win of Zotero.getMainWindows?.()||[Zotero.getMainWindow()]){addMainEntry(win);const workspace=workspaces.get(win);if(workspace&&!workspace.body.isConnected){workspaces.delete(win);continue;}if(workspace&&!workspace.body.hidden)bindItem(panels.get(workspace.body),currentPDF||workspaceItem(win));}
-    for(const s of panels.values())scheduleSessionPreparation(s);
+    for(const s of panels.values())if(panelVisible(s)){if(s.deferredURL&&currentPDF?.id===s.item?.id)navigateSession(s,s.deferredURL);scheduleSessionPreparation(s);}
     if(currentPDF)for(const s of panels.values())if(!s.workspace&&s.body.getBoundingClientRect().width>0&&s.body.getBoundingClientRect().height>0)bindItem(s,currentPDF);
     const current=[...panels.values()].some(s=>!s.busy&&s.item?.id===currentReader?.itemID&&s.body.getBoundingClientRect().width>0)?selection(currentReader,false):null;if(current)for(const s of panels.values())if(!s.busy&&current.reader.itemID===s.item?.id)s.captured=current;
     for(const [body,s]of panels){
-      if(!body.isConnected){s.libraryUnsubscribe?.();panels.delete(body);continue;}
+      if(!panelVisible(s)){pauseBackground(s);continue;}
       if(!get('onboardingSeen',false)&&body.getBoundingClientRect().width>0&&body.getBoundingClientRect().height>0)guide(s,0);
       if(PaperSessions.project&&(s.creating||s.navigation)&&!s.polling){
         s.polling=true;const token=s.sessionToken;
@@ -1168,17 +1202,17 @@ var PaperWebAssistant = (() => {
       // Defaults live in the addon; only user edits need a persisted preference.
       if(get('commands',null)&&JSON.stringify(commands)===JSON.stringify(defaults))Zotero.Prefs.clear(PREF+'commands',true);
       for(const w of Zotero.getMainWindows?.()||[Zotero.getMainWindow()]){w.document.l10n.addResourceIds(['paper-web-assistant.ftl']);addMenu(w);addMainEntry(w);}
-      paneID=Zotero.ItemPaneManager.registerSection({paneID:'paper-web-assistant',pluginID:ID,header:{l10nID:'paper-web-header',icon:'chrome://paper-web-assistant/content/icon.svg'},sidenav:{l10nID:'paper-web-nav',icon:'chrome://paper-web-assistant/content/icon.svg'},onInit:mount,onRender:mount,onItemChange:({body,item,setEnabled})=>{setEnabled(!!item);const s=panels.get(body);if(s)bindItem(s,panelItem(item));},onDestroy:({body})=>{panels.get(body)?.libraryUnsubscribe?.();panels.delete(body);}});
+      paneID=Zotero.ItemPaneManager.registerSection({paneID:'paper-web-assistant',pluginID:ID,header:{l10nID:'paper-web-header',icon:'chrome://paper-web-assistant/content/icon.svg'},sidenav:{l10nID:'paper-web-nav',icon:'chrome://paper-web-assistant/content/icon.svg'},onInit:()=>{},onRender:mount,onItemChange:({body,item,setEnabled})=>{setEnabled(!!item);const s=panels.get(body);if(s)bindItem(s,panelItem(item));},onDestroy:({body})=>disposePanel(panels.get(body))});
       if(!paneID)throw new Error('无法注册Paper GPT侧栏。');
       Zotero.Reader.registerEventListener('renderTextSelectionPopup',selectionHook,ID);
       Zotero.Reader.registerEventListener('renderToolbar',toolbarHook,ID);
       Zotero.Reader.registerEventListener('createAnnotationContextMenu',menuHook,ID);
       timer=Zotero.getMainWindow().setInterval(scan,500);scan();
     },
-    stop(){running=false;if(activeRun){activeRun.cancelled=true;try{actor(activeRun.s).sendQuery('PaperWeb:Cancel').catch(()=>{});}catch(_){}}if(timer)Zotero.getMainWindow()?.clearInterval(timer);timer=null;for(const w of workspaces.keys())w.document.getElementById('zotero-layout-switcher')?.removeAttribute('data-paper-gpt-open');for(const n of injected)n.remove();injected.clear();workspaces.clear();Zotero.Reader._unregisterEventListenerByPluginID(ID);if(paneID)Zotero.ItemPaneManager.unregisterSection(paneID);for(const s of panels.values()){s.sessionToken=null;if(s.backgroundTimer)s.win.clearTimeout(s.backgroundTimer);s.libraryUnsubscribe?.();s.root.remove();}panels.clear();try{ChromeUtils.unregisterWindowActor('PaperWeb');}catch(_){}chromeHandle?.destruct();},
+    stop(){running=false;if(activeRun){activeRun.cancelled=true;try{actor(activeRun.s).sendQuery('PaperWeb:Cancel').catch(()=>{});}catch(_){}}if(timer)Zotero.getMainWindow()?.clearInterval(timer);timer=null;for(const s of [...panels.values()])disposePanel(s);for(const w of workspaces.keys())w.document.getElementById('zotero-layout-switcher')?.removeAttribute('data-paper-gpt-open');for(const n of injected)n.remove();injected.clear();workspaces.clear();Zotero.Reader._unregisterEventListenerByPluginID(ID);if(paneID)Zotero.ItemPaneManager.unregisterSection(paneID);panels.clear();try{ChromeUtils.unregisterWindowActor('PaperWeb');}catch(_){}chromeHandle?.destruct();},
     show,run,selection,context,writeAnnotation,saveNote,locate,tool,
     get commands(){return commands;},
     get panels(){return [...panels.values()];},
-    diagnostics(){return {version:'1.6.6',webBuild:WEB_BUILD,compatibility:PaperZoteroCompat.diagnostics(),paneID,commands:commands.length,panels:[...panels.values()].map(s=>({visible:!!s.body.getBoundingClientRect().height&&s.win.getComputedStyle(s.root).visibility==='visible',status:s.status.textContent,url:s.browser.currentURI?.spec})),busy:!!activeRun};}
+    diagnostics(){return {version:'1.6.7',webBuild:WEB_BUILD,compatibility:PaperZoteroCompat.diagnostics(),paneID,commands:commands.length,panels:[...panels.values()].map(s=>({visible:panelVisible(s),deferred:!!s.deferredURL,background:!!s.backgroundCheck,navigationCount:s.navigationCount||0,status:s.status.textContent,url:s.browser.currentURI?.spec})),busy:!!activeRun};}
   };
 })();

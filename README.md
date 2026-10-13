@@ -2,7 +2,7 @@
 
 用于 Zotero 的论文阅读与翻译插件，集成 ChatGPT 网页对话、PDF 翻译、标注、笔记及常用文库工具。
 
-**当前版本：1.6.6**。主要实机验证环境为 **Windows + Zotero 10.0.6**；安装声明支持 Zotero 9 至 10.0.x，其他平台尚未逐项验证。
+**当前版本：1.6.7**。主要实机验证环境为 **Windows + Zotero 10.0.6**；安装声明支持 Zotero 9 至 10.0.x，其他平台尚未逐项验证。
 
 ## 功能
 
@@ -16,7 +16,7 @@
 
 ## 安装
 
-1. 下载 [Paper-GPT-1.6.6.xpi](./Paper-GPT-1.6.6.xpi)。在 GitHub 文件页面选择下载原始文件。
+1. 下载 [Paper-GPT-1.6.7.xpi](./Paper-GPT-1.6.7.xpi)。在 GitHub 文件页面选择下载原始文件。
 2. 打开 Zotero → **工具 → 插件**。
 3. 点击齿轮 → **从文件安装插件**，选择 XPI。
 4. 完成安装后重新打开 Zotero。
@@ -127,7 +127,7 @@
 
     PaperGPT/
     ├── README.md
-    ├── Paper-GPT-1.6.6.xpi
+    ├── Paper-GPT-1.6.7.xpi
     ├── build.py
     └── src/
 
@@ -168,3 +168,7 @@ src/manifest.json 位于生成的 XPI 根目录。后续发布请递增 manifest
     node tests/test-composer-limits.cjs
 
 这些检查使用本地模拟数据，不连接 ChatGPT 或个人文库。
+
+## 1.6.7 稳定性更新
+
+减少导入文献和选中条目时的网页加载；提前核实只处理当前可见 PDF，并限制并发。关闭侧栏时取消后台任务、清除监听器和释放引用。详见 [稳定性修复说明](./STABILITY.md)。

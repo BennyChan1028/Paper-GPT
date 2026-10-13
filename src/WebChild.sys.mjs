@@ -1,5 +1,10 @@
-const PAPER_WEB_ACTOR_BUILD='20261012-bounded-analysis-r13';
+const PAPER_WEB_ACTOR_BUILD='20261013-stability-r14';
 export class PaperWebChild extends JSWindowActorChild {
+  didDestroy(){
+    this.cancelled=true;this.disposed=true;
+    try{for(const name of ['click','submit','keydown'])this.watchDocument?.removeEventListener(name,this.projectListener,true);}catch(_){}
+    this.projectListener=null;this.projectWatch=null;this.watchDocument=null;this.lastAnswerNode=null;this.projectSubmission=null;
+  }
   async verifyProjectConversation(data){
     const doc=this.document,win=this.contentWindow,home=data.project;
     const id=url=>{
@@ -12,7 +17,7 @@ export class PaperWebChild extends JSWindowActorChild {
     let quiet=0,foundTicks=0,previous='',reset=false,main;
     this.cancelled=false;
     for(let n=0;n<180;n++){
-      if(this.cancelled)return response('unknown',{error:'任务已停止。'});
+      if(this.cancelled||this.disposed)return response('unknown',{error:'任务已停止。'});
       if(!this.projectRoute(win.location.href,home,true))return response('unknown',{error:'尚未打开目标项目，不能核实对话。'});
       const access=this.pageAccess().access;
       if(!['ok','loading'].includes(access))return response('unknown',{error:access==='login-required'?'请先登录能访问该项目的账号。':'项目无法访问，不能判定对话是否存在。'});
@@ -202,6 +207,7 @@ export class PaperWebChild extends JSWindowActorChild {
       };
       // The addon's .click() is an untrusted DOM event in privileged actor code.
       for(const name of ['click','submit','keydown'])doc.addEventListener(name,this.projectListener,true,true);
+      this.watchDocument=doc;
     }
     const access=this.pageAccess();
     return {actorBuild:PAPER_WEB_ACTOR_BUILD,url:win.location.href,loaded:doc.readyState==='complete',ready:!!input&&access.access==='ok',generating:!!doc.querySelector('button[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="停止生成"],button[aria-label="Stop response"]'),...access,inProject,empty:!!input&&!(input.value||input.textContent||'').trim(),project:home,submissionToken:this.projectSubmission?.project===home?this.projectSubmission.token:null};
@@ -243,7 +249,7 @@ export class PaperWebChild extends JSWindowActorChild {
     let previous = "";
     let stableSince = 0;
     while (Date.now() - started < timeoutMs) {
-      if (this.cancelled) throw new Error("已停止等待。回复仍可在网页查看。");
+      if (this.cancelled||this.disposed) throw new Error("已停止等待。回复仍可在网页查看。");
       await new Promise(resolve => this.contentWindow.setTimeout(resolve, 350));
       if(!['ok','loading'].includes(this.pageAccess().access))throw new Error('网页无法继续回复，请恢复访问后重试。');
       const answers = this.readAnswers();
@@ -261,6 +267,7 @@ export class PaperWebChild extends JSWindowActorChild {
     throw new Error("等待网页回复超时，请在侧栏网页查看状态。");
   }
   async receiveMessage(message) {
+    if(this.disposed)throw new Error('网页已关闭，后台任务已停止。');
     if (this.contentWindow.location.hostname !== "chatgpt.com") throw new Error("请先完成登录并回到 ChatGPT。");
     const doc = this.document;
     const win = this.contentWindow;

@@ -229,7 +229,8 @@ var AnnotationPopupControls = (() => {
   }
   function ensureReader(reader) {
     const win = reader._iframeWindow;
-    if (!win?.document || win.document.readyState === "loading") return;
+    if (!win || win.closed) { const ctx=contexts.get(reader);if(ctx)detach(ctx);return; }
+    if (!win.document || win.document.readyState === "loading") return;
     const existing = contexts.get(reader);
     if (existing?.doc === win.document) { existing.scan(); return; }
     if (existing) detach(existing);
@@ -255,11 +256,14 @@ var AnnotationPopupControls = (() => {
     scan();
   }
   function detach(ctx) {
+    // Release the strong reader/document entry even if Gecko already tore it down.
+    contexts.delete(ctx.reader);
     ctx.observer?.disconnect(); ctx.cancelGesture?.();
     for (const cleanup of ctx.headerCleanup.values()) { try { cleanup(); } catch (_) {} }
     ctx.headerCleanup.clear();
     for (const cleanup of ctx.cleanup) { try { cleanup(); } catch (_) {} }
-    for (const popup of ctx.doc.querySelectorAll(".annotation-popup.ap-enhanced")) {
+    let popups=[];try{popups=ctx.doc.querySelectorAll(".annotation-popup.ap-enhanced");}catch(_){}
+    for (const popup of popups) {
       popup.classList.remove("ap-enhanced", "ap-moved");
       for (const prop of ["--ap-font-size", "--ap-width", "--ap-content-height"]) popup.style.removeProperty(prop);
       restorePosition(ctx, popup);
