@@ -11,10 +11,10 @@ var PaperHelp=(()=>{
     ['总结','总结笔记','笔记处理','将当前文献笔记概括为 300 字以内的总结。','需要当前文献已有笔记；发送后可选择另存笔记。'],
     ['提升写作','润色笔记','笔记处理','改善笔记的语言、结构和学术表达。','读取当前文献笔记，输出中文润色结果；原笔记保持不变。'],
     ['总结本页','总结本页','页面与全文','概括当前 PDF 页面，帮助快速理解本页内容。','打开 PDF 并停留在要处理的页面后发送。'],
-    ['翻译本页','翻译本页','页面与全文','翻译当前 PDF 页面，并尝试识别标题、去除页眉页脚。','打开 PDF 并切到目标页；扫描件可改用截图翻译。'],
+    ['翻译本页','翻译本页','页面与全文','翻译当前页正文和图注，并直接写入原文下划线标注。','切到目标页后发送。整页译文收齐后替换本页 Paper GPT 旧译文，保留手动批注；扫描件需先 OCR。'],
     ['部分总结','部分总结','页面与全文','总结指定范围的 PDF 页面。','在设置 → 保存方式与页码中填写范围，例如 1-3，再发送。'],
     ['全文总结','全文总结','页面与全文','总结整个 PDF，并将全文作为继续提问的材料。','打开要阅读的 PDF；较长论文可改用页码范围或上传文件。'],
-    ['全文翻译','全文翻译','页面与全文','仅翻译正文段落和图注，跳过参考文献与零散文字，并保存到原文下划线标注。','打开 PDF 后选择全文翻译并发送；可停止并继续，已完成的段落不会重复创建。扫描件需先 OCR。'],
+    ['全文翻译','全文翻译','页面与全文','逐页翻译正文段落和图注，并保存到原文下划线标注。','长页面按段落分批，收齐本页后保存。已有译文的段落跳过，只补充未完成部分；保留手动批注。扫描件需先 OCR。'],
     ['截图翻译','截图翻译','页面与全文','上传当前页截图，让网页模型识别并翻译页面。','等待页面完整显示后发送；需要 ChatGPT 网页支持图片附件。'],
     ['🪐AskPDF Full Text','全文问答','检索与问答','使用 PDF 全文回答你的问题。','在设置中填写问题；选择本指令后发送。'],
     ['🪐AskPDF','片段检索问答','检索与问答','从当前 PDF 检索关键词匹配的片段，再回答问题。','在设置中填写问题，英文论文可带英文关键词；这是关键词检索。'],
@@ -37,7 +37,7 @@ var PaperHelp=(()=>{
     ['知识库跨论文问答','知识库跨论文问答','检索与问答','使用当前分类检索到的文献片段回答跨论文问题。','填写问题；可先建立全文索引。检索使用本地关键词匹配。'],
     ['术语解释','术语解释','选文与写作','用通俗中文解释术语，并给出具体例子。','选中术语及附近上下文后发送。']
   ];
-  const sourceNames={selection:'选中文段',abstract:'论文摘要',notes:'文献笔记',page:'当前页',pages:'页码范围',full:'PDF 全文',pageImage:'当前页截图',related:'当前 PDF 检索',clipboard:'剪贴板',annotations:'全部标注',items:'文献信息',library:'当前分类知识库',none:'仅问题',outline:'全文章节',autoAnnotations:'全文标注',fullTranslation:'全文逐段翻译'};
+  const sourceNames={selection:'选中文段',abstract:'论文摘要',notes:'文献笔记',page:'当前页',pageTranslation:'本页逐段翻译',pages:'页码范围',full:'PDF 全文',pageImage:'当前页截图',related:'当前 PDF 检索',clipboard:'剪贴板',annotations:'全部标注',items:'文献信息',library:'当前分类知识库',none:'仅问题',outline:'全文章节',autoAnnotations:'全文标注',fullTranslation:'全文逐段翻译'};
   const lookup=new Map(entries.map(([name,label,group,description,usage])=>[name,{label,group,description,usage}]));
   function info(command){return lookup.get(command?.name)||{label:command?.name||'自定义指令',group:'自定义指令',description:'使用你保存的提示词处理所选材料。',usage:'检查内容来源与提示词；可在设置 → 提示词设置中编辑。'};}
   function width(commands,measure){return Math.ceil(Math.max(126,Math.min(280,Math.max(...commands.map(c=>measure(info(c).label)),84)+42)));}

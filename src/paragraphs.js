@@ -67,14 +67,14 @@ var PaperParagraphs=(()=>{
   const appendixHeading=text=>/^(?:appendi(?:x|ces)|supplementary (?:material|information)|附录)(?:\s+[A-Z\d]+)?(?:\s*[.:：]\s*.*)?$/i.test(text);
   const caption=text=>/^(?:fig(?:ure)?\.?\s*|图\s*)(?:[A-Z]?\d+[A-Za-z]?|[IVX]+)\s*[.:：]?/i.test(text);
   const metadata=text=>/^(?:arxiv\s*:|doi\s*:|https?:\/\/|www\.|©|copyright\b|all rights reserved\b|received\b|accepted\b|keywords\s*[:：—-]|index terms\s*[:：—-]|corresponding author\b|e-?mail\s*:|the authors are with\b)/i.test(text)||/^[^\s]+@[^\s]+\.[^\s]+$/.test(text);
-  function selectContent(paragraphs){
+  function selectContent(paragraphs,{inReferences:referenceStart=false}={}){
     // Classify whole native paragraph blocks before batching, preserving short
     // tails split from valid body paragraphs and figure captions.
     const groups=[];for(const p of paragraphs){const last=groups.at(-1);if(last?.key===(p.blockID||p.id))last.parts.push(p);else groups.push({key:p.blockID||p.id,parts:[p]});}
     for(const g of groups){g.text=normalized(g.parts.map(p=>p.text).join(' '));g.page=g.parts[0].annotation.position.pageIndex;const heights=g.parts.map(p=>p.textHeight).filter(h=>h>0).sort((a,b)=>a-b);g.height=heights[Math.floor(heights.length/2)]||0;}
     // Use the dominant prose glyph height to reject small sentence-shaped text
     // inside plots/diagrams while figure captions remain an explicit exception.
-    const fonts=new Map();let referenceZone=false;
+    const fonts=new Map();let referenceZone=referenceStart;
     for(const g of groups){
       if(referenceHeading(g.text))referenceZone=true;else if(appendixHeading(g.text))referenceZone=false;
       if(!referenceZone&&g.height&&g.text.length>=80&&!caption(g.text)&&!metadata(g.text)){
@@ -83,7 +83,7 @@ var PaperParagraphs=(()=>{
     }
     const bodyHeight=[...fonts].sort((a,b)=>b[1]-a[1])[0]?.[0]||0;
     const repeats=new Map();for(const g of groups){if(!repeats.has(g.text))repeats.set(g.text,new Set());repeats.get(g.text).add(g.page);}
-    const kept=[],excluded=[];let inReferences=false,captionLead=false;
+    const kept=[],excluded=[];let inReferences=referenceStart,captionLead=false;
     for(const g of groups){
       const text=g.text,words=text.match(/[A-Za-z]+(?:['’-][A-Za-z]+)*/g)||[],han=(text.match(/[\u3400-\u9fff]/g)||[]).length,realWords=words.filter(w=>w.length>1).length;
       let reason='';
@@ -101,7 +101,7 @@ var PaperParagraphs=(()=>{
       else reason='fragment';
       captionLead=!reason&&g.parts[0].contentKind==='caption'&&!/[.!?。！？][”"')\]]?$/.test(text)||caption(text)&&text.length<20;
       if(reason)excluded.push(...g.parts.map(p=>({id:p.id,page:g.page+1,reason})));else kept.push(...g.parts);
-    }return {paragraphs:kept,excluded};
+    }return {paragraphs:kept,excluded,inReferences};
   }
   function pieces(p){
     if(prompt([p]).length<=promptLimit&&p.text.length<=chunkLimit)return [p];

@@ -1,7 +1,7 @@
 /* Independent implementation. No GPT PRO code or runtime bridge is used. */
 var PaperWebAssistant = (() => {
   const ID='paper-web-assistant@local.customization', PREF='extensions.paperWebAssistant.', HTML='http://www.w3.org/1999/xhtml';
-  const WEB_BUILD='20261013-stability-r14';
+  const WEB_BUILD='20261027-page-translation-r15';
   const panels=new Map(), injected=new Set(), readers=new Map(), workspaces=new Map();
   let chromeHandle, paneID, timer, commands=[], defaults=[], running=false, activeRun=null, uiCSS='', sessionSerial=0;
   const get=(k,d)=>{try{return Zotero.Prefs.get(PREF+k,true)??d;}catch(_){return d;}};
@@ -317,7 +317,8 @@ var PaperWebAssistant = (() => {
     const q=options.question??s.question.value;
     activeRun={s,cancelled:false};s.materialNotice='';s.taskItems=currentReader?[target].filter(Boolean):items(s);s.taskReader=currentReader;setBusy(s,true);
     try{
-      if(c.scope==='fullTranslation'){if(options.draft)throw new Error('全文翻译需逐段执行，请点击发送。');return await translateFull(s,currentReader);}
+      const translationScope=options.scope||c.scope;
+      if(['fullTranslation','pageTranslation'].includes(translationScope)){if(options.draft)throw new Error('逐段翻译并写入标注需点击发送。');return await translateFull(s,currentReader,{pageOnly:translationScope==='pageTranslation'});}
       await ensureSession(s);
       if(s.mode.value==='agent'&&!options.command)return await agent(s,q);
       const scope=options.scope||c.scope||s.scope.value;
@@ -340,7 +341,7 @@ var PaperWebAssistant = (() => {
       else if(write==='append'||write==='replace')await writeAnnotation(captured,answer,write);
       status(s,(write==='append'||write==='replace'?'已将网页回复写入标注。':'回复已完成，直接显示在下方网页。')+(s.namingWarning?' '+s.namingWarning:'')+(s.materialNotice?'\n'+s.materialNotice:''));
       return answer;
-    }catch(e){if(activeRun?.cancelled){status(s,c.scope==='fullTranslation'?'已停止全文翻译，已保存 '+(s.fullTranslationProgress?.done||0)+' 段；再次运行可继续。':'已停止。');return;}reportError(s,e);throw e;}
+    }catch(e){if(activeRun?.cancelled){status(s,['fullTranslation','pageTranslation'].includes(c.scope)?'已停止翻译，已保存 '+(s.fullTranslationProgress?.done||0)+' 段；未完成页面的旧批注保留。':'已停止。');return;}reportError(s,e);throw e;}
     finally{
       await rememberSession(s).catch(()=>{});activeRun=null;setBusy(s,false);delete s.taskItems;delete s.taskReader;
       if('pendingItem' in s){const item=s.pendingItem;delete s.pendingItem;bindItem(s,item);}
@@ -424,33 +425,56 @@ var PaperWebAssistant = (() => {
       s.translationReplyDiagnostic.recovered=true;return recovered;
     }
   }
-  async function translateFull(s,r){
-    if(!r)throw new Error('请先打开需要全文翻译的 PDF。');
+  function currentPageIndex(r){
+    const ir=r?._internalReader,view=ir?._lastView||ir?._primaryView,app=view?._iframeWindow?.PDFViewerApplication;
+    const number=Number(app?.pdfViewer?.currentPageNumber??app?.page);
+    if(Number.isInteger(number)&&number>=1)return number-1;
+    const index=view?._state?.pageIndex;
+    if(Number.isInteger(index)&&index>=0)return index;
+    throw new Error('尚未确定当前 PDF 页码，请等待页面加载完成后重试。');
+  }
+  async function savePageTranslation(attachment,parent,translation){
+    // saveFromJSON always starts its own transaction. Use Item.save here so all
+    // replacements on this page share the caller's transaction without nesting.
+    const source=parent.annotation,item=new Zotero.Item('annotation');
+    item.libraryID=attachment.libraryID;item.key=Zotero.DataObjectUtilities.generateKey();
+    await item.loadPrimaryData();item.parentID=attachment.id;
+    item.annotationType='underline';item.annotationText=parent.text;item.annotationComment=translation;
+    item.annotationColor=source.color||'#2ea8e5';item.annotationPageLabel=source.pageLabel;
+    item.annotationSortIndex=source.sortIndex;item.annotationPosition=JSON.stringify(source.position);
+    item.setTags((source.tags||[]).map(t=>({tag:t.name})));
+    await item.save({skipSelect:true});
+  }
+  async function translateFull(s,r,{pageOnly=false}={}){
+    if(!r)throw new Error('请先打开需要翻译的 PDF。');
     const attachment=Zotero.Items.get(r.itemID);
     if(!attachment?.isPDFAttachment?.()||!attachment.isEditable())throw new Error('当前 PDF 无法写入标注，请使用可编辑的本地 PDF。');
-    const view=r._internalReader?._primaryView,win=view?._iframeWindow,pdf=win?.PDFViewerApplication?.pdfDocument;
+    const view=(pageOnly?r._internalReader?._lastView:null)||r._internalReader?._primaryView,win=view?._iframeWindow,pdf=win?.PDFViewerApplication?.pdfDocument;
     if(!pdf?.getPageData)throw new Error('PDF 尚未提供段落与坐标，请等待阅读器加载完成后重试。');
+    const first=pageOnly?currentPageIndex(r):0,last=pageOnly?first+1:pdf.numPages;
+    if(first>=pdf.numPages)throw new Error('当前 PDF 页码无效，请重新打开该页后重试。');
+    const label=pageOnly?'本页翻译':'全文翻译';
     const check=()=>{if(activeRun?.cancelled)throw new Error('任务已停止。');if(!r._internalReader||s.sessionKey!==PaperSessions.key(attachment))throw new Error('PDF 已关闭或文献已切换，已完成的译文标注保留。');};
-    const existing=attachment.getAnnotations(),paragraphs=[],unreadable=[];let excludedCount=0;
-    let done=0,skipped=0,total=0;
+    const unreadable=[];let excludedCount=0,inReferences=false;
+    let done=0,skipped=0,total=0,replaced=0;
     try{
-      for(let pageIndex=0;pageIndex<pdf.numPages;pageIndex++){
+      for(let pageIndex=first;pageIndex<last;pageIndex++){
         check();status(s,'正在读取 PDF 段落 · 第 '+(pageIndex+1)+'/'+pdf.numPages+' 页…');
         const data=await pdf.getPageData(Components.utils.cloneInto({pageIndex},win));check();
         const page=PaperParagraphs.extract(data,pageIndex,pdf._pageLabels?.[pageIndex]||String(pageIndex+1));
         if(!page.length)unreadable.push(pageIndex+1);
-        paragraphs.push(...page);await Zotero.Promise.delay(0);
-      }
-      const selected=PaperParagraphs.selectContent(paragraphs);excludedCount=selected.excluded.length;
-      paragraphs.splice(0,paragraphs.length,...selected.paragraphs);
-      total=paragraphs.length;if(!total)throw new Error(unreadable.length===pdf.numPages?'PDF 没有可定位的文字，扫描件需先完成 OCR。':'没有识别到需要翻译的正文段落或图注。');
-      const completed=PaperParagraphs.completionIndex(existing);
-      const pending=paragraphs.filter(p=>!completed(p));skipped=total-pending.length;
+        const selected=PaperParagraphs.selectContent(page,{inReferences});inReferences=selected.inReferences;
+        const paragraphs=selected.paragraphs;excludedCount+=selected.excluded.length;total+=paragraphs.length;
+        const existing=attachment.getAnnotations(),completed=PaperParagraphs.completionIndex(existing);
+        const pending=pageOnly?paragraphs:paragraphs.filter(p=>!completed(p));skipped+=paragraphs.length-pending.length;
+        if(!pending.length){await Zotero.Promise.delay(0);continue;}
+        const oldTranslations=pageOnly?existing.filter(a=>{try{return a.getTags().some(t=>t.tag===PaperParagraphs.tag)&&JSON.parse(a.annotationPosition).pageIndex===pageIndex;}catch(_){return false;}}):[];
+        if(oldTranslations.some(a=>!a.isEditable()||a.annotationIsExternal))throw new Error('本页存在只读的 Paper GPT 译文批注，未替换。');
       s.fullTranslationProgress={total,done,skipped,unreadable,excludedCount};
-      const batches=PaperParagraphs.batches(pending),partial=new Map();
+      const batches=PaperParagraphs.batches(pending),partial=new Map(),translated=[];
       for(const [batchIndex,batch] of batches.entries()){
         s.translationBatchLabel='第 '+(batch[0].annotation.position.pageIndex+1)+' 页 · 批次 '+(batchIndex+1)+'/'+batches.length;
-        check();status(s,'全文翻译 · '+s.translationBatchLabel+' · 已保存 '+done+' 段 / 共 '+total+' 段'+(skipped?' · 跳过已完成 '+skipped+' 段':''));
+        check();status(s,label+' · '+s.translationBatchLabel+' · 已保存 '+done+' 段'+(skipped?' · 跳过已完成 '+skipped+' 段':''));
         const rows=await translationBatch(s,batch,check);
         for(const row of rows){
           check();const piece=row.paragraph,parent=piece.parent||piece;let translation=row.translation;
@@ -460,13 +484,31 @@ var PaperWebAssistant = (() => {
             if(saved.filter(v=>typeof v==='string').length!==piece.partCount)continue;
             translation=saved.join('\n');partial.delete(parent.id);
           }
-          await writeAnnotation({reader:r,annotation:parent.annotation,text:parent.text},translation,'replace',{silent:true});
-          done++;s.fullTranslationProgress.done=done;await Zotero.Promise.delay(0);
+          translated.push({parent,translation});
         }
       }
-      const result='全文翻译完成：新增 '+done+' 段下划线译文标注，已有 '+skipped+' 段保留；跳过 '+excludedCount+' 个参考文献或零散文字片段。'+(unreadable.length?' 第 '+unreadable.join('、')+' 页未提取到可定位文字，未生成标注。':'');
+        check();if(partial.size||translated.length!==pending.length)throw new Error('本页译文尚未完整，原有批注已保留。');
+        try{await Zotero.DB.executeTransaction(async()=>{
+          check();
+          const current=attachment.getAnnotations();
+          for(const a of oldTranslations){if(!current.some(v=>v.id===a.id)||!a.isEditable()||a.annotationIsExternal)throw new Error('本页译文批注已变化，未替换，请重试。');}
+          for(const {parent,translation}of translated){check();await savePageTranslation(attachment,parent,translation);}
+          for(const a of oldTranslations)await a.erase();
+        });}catch(e){
+          // A native rollback restores the rows but a parent may still hold the
+          // child list observed inside the transaction. Refresh that cache too.
+          await attachment.reload?.(['primaryData','childItems'],true);
+          if(oldTranslations.length&&Zotero.Items.getAsync)await Zotero.Items.getAsync(oldTranslations.map(a=>a.id));
+          throw e;
+        }
+        replaced+=oldTranslations.length;done+=translated.length;s.fullTranslationProgress.done=done;
+        await Zotero.Promise.delay(0);
+      }
+      if(!total)throw new Error(unreadable.length===last-first?'PDF 没有可定位的文字，扫描件需先完成 OCR。':'没有识别到需要翻译的正文段落或图注，已有批注保留。');
+      s.fullTranslationProgress={total,done,skipped,unreadable,excludedCount};
+      const result=label+'完成'+(pageOnly?'（第 '+(first+1)+' 页）':'')+'：新增 '+done+' 段下划线译文标注，已有 '+skipped+' 段保留'+(replaced?'；替换 '+replaced+' 条旧译文批注':'')+'；跳过 '+excludedCount+' 个参考文献或零散文字片段。'+(unreadable.length?' 第 '+unreadable.join('、')+' 页未提取到可定位文字，未生成标注。':'');
       status(s,result);return result;
-    }catch(e){s.fullTranslationProgress={total,done,skipped,unreadable,excludedCount};if(activeRun?.cancelled){status(s,'已停止全文翻译，已保存 '+done+' 段。再次运行会跳过已完成的段落。');return;}throw new Error((e.message||String(e))+' 已保存 '+done+' 段译文；再次运行会跳过已完成的段落。');}finally{delete s.translationBatchLabel;}
+    }catch(e){s.fullTranslationProgress={total,done,skipped,unreadable,excludedCount};if(activeRun?.cancelled){status(s,'已停止'+label+'，已保存 '+done+' 段。未完成页面的原有批注保留。');return;}throw new Error((e.message||String(e))+' 已保存 '+done+' 段译文；未完成页面的原有批注保留。');}finally{delete s.translationBatchLabel;}
   }
   async function locate(r,quote,page){
     const pdf=r._internalReader?._primaryView?._iframeWindow?.PDFViewerApplication?.pdfDocument;
@@ -920,7 +962,7 @@ var PaperWebAssistant = (() => {
     const grid=el(doc,'div');grid.className='pwa-fields';control.append(grid);
     s.command=select([]);s.command.className='pwa-command';s.command.hidden=true;s.command.setAttribute('aria-label','快捷指令');bar.append(s.command);
     s.commandToggle=button(bar,'翻译',()=>openCommands(s));s.commandToggle.className='pwa-command pwa-command-toggle';s.commandToggle.dataset.uiToggle='true';s.commandToggle.setAttribute('aria-haspopup','dialog');s.commandToggle.setAttribute('aria-expanded','false');
-    s.scope=field(grid,'内容来源',select([['selection','选中文段'],['page','当前页'],['pages','页码范围'],['pageImage','当前页截图'],['full','PDF 全文'],['outline','全文章节'],['autoAnnotations','全文标注'],['fullTranslation','全文逐段翻译'],['related','当前 PDF 检索'],['items','文献信息'],['abstract','论文摘要'],['annotations','全部标注'],['notes','文献笔记'],['clipboard','剪贴板'],['library','当前分类知识库'],['none','仅问题']]));
+    s.scope=field(grid,'内容来源',select([['selection','选中文段'],['page','当前页'],['pageTranslation','本页逐段翻译'],['pages','页码范围'],['pageImage','当前页截图'],['full','PDF 全文'],['outline','全文章节'],['autoAnnotations','全文标注'],['fullTranslation','全文逐段翻译'],['related','当前 PDF 检索'],['items','文献信息'],['abstract','论文摘要'],['annotations','全部标注'],['notes','文献笔记'],['clipboard','剪贴板'],['library','当前分类知识库'],['none','仅问题']]));
     s.barScope=s.scope.cloneNode(true);s.barScope.className='pwa-source';s.barScope.setAttribute('aria-label','内容来源');s.barScope.hidden=true;control.append(s.barScope);s.lockControls.push(s.barScope);
     s.barScope.addEventListener('change',()=>{s.scope.value=s.barScope.value;commandInfo(s);});s.scope.addEventListener('change',()=>commandInfo(s));
     s.write=field(grid,'回复保存到',select([['answer','仅网页显示'],['append','追加到标注'],['replace','替换标注译文'],['note','另存笔记']]));
@@ -938,7 +980,7 @@ var PaperWebAssistant = (() => {
     s.question=el(doc,'textarea');s.question.className='pwa-question';s.question.rows=2;s.question.placeholder='补充问题或要求；选中文段可直接发送翻译。';s.question.hidden=true;s.lockControls.push(s.question);
     s.sendButton=button(bar,'发送',()=>{toggleOptions(s,true);s.help.hidden=true;s.helpButton.setAttribute('aria-expanded','false');return run(s,{scope:s.scope.value});});s.sendButton.className='pwa-primary';s.sendButton.title='执行所选指令（Ctrl+Enter）';
     button(bar,'跟进',async()=>{await ensureSession(s);s.browser.focus?.();const result=await query(s,'FocusComposer');if(!result.focused)throw new Error('网页输入框尚未就绪，请等待加载后重试。');status(s,'请直接在 ChatGPT 网页输入框补充问题，沿用当前会话。');}).title='在当前会话的网页输入框继续提问';
-    button(bar,'填入',()=>{if(s.scope.value==='fullTranslation')throw new Error('全文翻译需逐段执行，请点击发送。');return run(s,{draft:true,scope:s.scope.value});}).title='把内容填入网页，暂不发送';
+    button(bar,'填入',()=>{if(['fullTranslation','pageTranslation'].includes(s.scope.value))throw new Error('逐段翻译并写入标注需点击发送。');return run(s,{draft:true,scope:s.scope.value});}).title='把内容填入网页，暂不发送';
     s.stopButton=button(bar,'停止',async()=>{if(activeRun){activeRun.cancelled=true;await query(activeRun.s,'Cancel');status(s,'已停止。');}},false);s.stopButton.disabled=true;s.stopButton.hidden=true;
     s.helpButton=button(bar,'说明',()=>showHelp(s),false);s.helpButton.className='pwa-help-button';s.helpButton.dataset.uiToggle='true';s.helpButton.setAttribute('aria-expanded','false');
     if(typeof PaperLibraryTools!=='undefined'){
@@ -1167,7 +1209,7 @@ var PaperWebAssistant = (() => {
     const doc=win.document;
     const runCommand=async(name,write='answer')=>{
       const c=commands.find(c=>c.name===name);if(!c)throw new Error('指令不存在。');
-      if(['outline','autoAnnotations','fullTranslation'].includes(c.scope)&&!reader()){
+      if(['outline','autoAnnotations','fullTranslation','pageTranslation'].includes(c.scope)&&!reader()){
         const p=(await pdfs(items()))[0];if(!p)throw new Error('所选条目没有 PDF。');const r=await Zotero.Reader.open(p.id);await r._initPromise;
       }
       const s=await show();s.command.value=String(commands.indexOf(c));s.scope.value=c.scope;
@@ -1195,6 +1237,7 @@ var PaperWebAssistant = (() => {
       defaults=JSON.parse(await Zotero.File.getResourceAsync(rootURI+'commands.json'));
       try{commands=JSON.parse(get('commands','null'))||defaults;}catch(_){commands=defaults;}
       for(const c of defaults)if(!commands.some(old=>old.name===c.name))commands.push(c);
+      for(const c of commands)if(c.name==='翻译本页'&&c.scope==='page')c.scope='pageTranslation';
       const oldAbstract=commands.find(c=>c.name==='摘要总结'&&c.scope==='selection'&&c.text===defaults.find(d=>d.name==='摘要总结')?.text);
       if(oldAbstract)Object.assign(oldAbstract,defaults.find(d=>d.name==='摘要总结'));
       const oldOutline=commands.find(c=>c.name==='AI 大纲'&&c.scope==='full'&&c.text.startsWith('按照论文实际章节，生成中文层级大纲'));
@@ -1213,6 +1256,6 @@ var PaperWebAssistant = (() => {
     show,run,selection,context,writeAnnotation,saveNote,locate,tool,
     get commands(){return commands;},
     get panels(){return [...panels.values()];},
-    diagnostics(){return {version:'1.6.7',webBuild:WEB_BUILD,compatibility:PaperZoteroCompat.diagnostics(),paneID,commands:commands.length,panels:[...panels.values()].map(s=>({visible:panelVisible(s),deferred:!!s.deferredURL,background:!!s.backgroundCheck,navigationCount:s.navigationCount||0,status:s.status.textContent,url:s.browser.currentURI?.spec})),busy:!!activeRun};}
+    diagnostics(){return {version:'1.6.8',webBuild:WEB_BUILD,compatibility:PaperZoteroCompat.diagnostics(),paneID,commands:commands.length,panels:[...panels.values()].map(s=>({visible:panelVisible(s),deferred:!!s.deferredURL,background:!!s.backgroundCheck,navigationCount:s.navigationCount||0,status:s.status.textContent,url:s.browser.currentURI?.spec})),busy:!!activeRun};}
   };
 })();

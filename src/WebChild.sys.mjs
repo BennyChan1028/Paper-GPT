@@ -1,4 +1,4 @@
-const PAPER_WEB_ACTOR_BUILD='20261013-stability-r14';
+const PAPER_WEB_ACTOR_BUILD='20261027-page-translation-r15';
 export class PaperWebChild extends JSWindowActorChild {
   didDestroy(){
     this.cancelled=true;this.disposed=true;
