@@ -70,6 +70,11 @@
     "text": "按 PDF 原文段落翻译成简体中文，并直接保存到对应下划线标注。"
   },
   {
+    "name": "全文翻译为 PDF",
+    "scope": "pdfTranslation",
+    "text": "将论文翻译为中文 PDF，保留版面结构、图表和公式。"
+  },
+  {
     "name": "截图翻译",
     "scope": "pageImage",
     "text": "请你翻译本页为简体中文"

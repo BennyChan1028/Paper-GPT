@@ -1,0 +1,4 @@
+babeldoc==0.6.4
+bitstring==4.3.1
+pymupdf==1.26.7
+peewee==3.18.3

@@ -1,4 +1,4 @@
-const PAPER_WEB_ACTOR_BUILD='20261102-popup-font-r17';
+const PAPER_WEB_ACTOR_BUILD='20261102-pdf-export-r18';
 export class PaperWebChild extends JSWindowActorChild {
   didDestroy(){
     this.cancelled=true;this.disposed=true;

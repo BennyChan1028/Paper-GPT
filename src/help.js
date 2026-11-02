@@ -15,6 +15,7 @@ var PaperHelp=(()=>{
     ['部分总结','部分总结','页面与全文','总结指定范围的 PDF 页面。','在设置 → 保存方式与页码中填写范围，例如 1-3，再发送。'],
     ['全文总结','全文总结','页面与全文','总结整个 PDF，并将全文作为继续提问的材料。','打开要阅读的 PDF；较长论文可改用页码范围或上传文件。'],
     ['全文翻译','全文翻译','页面与全文','逐页翻译正文段落和图注，并保存到原文下划线标注。','长页面按段落分批，收齐本页后保存。已有译文的段落跳过，只补充未完成部分；保留手动批注。扫描件需先 OCR。'],
+    ['全文翻译为 PDF','全文翻译为 PDF','页面与全文','使用当前 ChatGPT 网页翻译，在本机生成保留原版面结构的中文 PDF。','先选择另存位置，再按页处理。保留原文、图表和公式；已完成译文可复用。中文会在原区域重新排字，不能保证每行换行与英文完全相同。首次使用需安装本机 PDF 导出组件。'],
     ['截图翻译','截图翻译','页面与全文','上传当前页截图，让网页模型识别并翻译页面。','等待页面完整显示后发送；需要 ChatGPT 网页支持图片附件。'],
     ['🪐AskPDF Full Text','全文问答','检索与问答','使用 PDF 全文回答你的问题。','在设置中填写问题；选择本指令后发送。'],
     ['🪐AskPDF','片段检索问答','检索与问答','从当前 PDF 检索关键词匹配的片段，再回答问题。','在设置中填写问题，英文论文可带英文关键词；这是关键词检索。'],
@@ -37,7 +38,7 @@ var PaperHelp=(()=>{
     ['知识库跨论文问答','知识库跨论文问答','检索与问答','使用当前分类检索到的文献片段回答跨论文问题。','填写问题；可先建立全文索引。检索使用本地关键词匹配。'],
     ['术语解释','术语解释','选文与写作','用通俗中文解释术语，并给出具体例子。','选中术语及附近上下文后发送。']
   ];
-  const sourceNames={selection:'选中文段',abstract:'论文摘要',notes:'文献笔记',page:'当前页',pageTranslation:'本页逐段翻译',pages:'页码范围',full:'PDF 全文',pageImage:'当前页截图',related:'当前 PDF 检索',clipboard:'剪贴板',annotations:'全部标注',items:'文献信息',library:'当前分类知识库',none:'仅问题',outline:'全文章节',autoAnnotations:'全文标注',fullTranslation:'全文逐段翻译'};
+  const sourceNames={selection:'选中文段',abstract:'论文摘要',notes:'文献笔记',page:'当前页',pageTranslation:'本页逐段翻译',pages:'页码范围',full:'PDF 全文',pageImage:'当前页截图',related:'当前 PDF 检索',clipboard:'剪贴板',annotations:'全部标注',items:'文献信息',library:'当前分类知识库',none:'仅问题',outline:'全文章节',autoAnnotations:'全文标注',fullTranslation:'全文逐段翻译',pdfTranslation:'全文翻译为 PDF'};
   const lookup=new Map(entries.map(([name,label,group,description,usage])=>[name,{label,group,description,usage}]));
   function info(command){return lookup.get(command?.name)||{label:command?.name||'自定义指令',group:'自定义指令',description:'使用你保存的提示词处理所选材料。',usage:'检查内容来源与提示词；可在设置 → 提示词设置中编辑。'};}
   function width(commands,measure){return Math.ceil(Math.max(126,Math.min(280,Math.max(...commands.map(c=>measure(info(c).label)),84)+42)));}

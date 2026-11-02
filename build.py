@@ -8,7 +8,7 @@ out=parser.parse_args().output.resolve()
 out.parent.mkdir(parents=True,exist_ok=True)
 with zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED,compresslevel=9) as z:
     for p in sorted(root.rglob('*')):
-        if p.is_file():
+        if p.is_file() and '__pycache__' not in p.parts and p.suffix != '.pyc':
             info=zipfile.ZipInfo(p.relative_to(root).as_posix(),date_time=(2026,1,1,0,0,0))
             info.compress_type=zipfile.ZIP_DEFLATED
             info.external_attr=0o644 << 16
