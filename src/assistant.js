@@ -1,7 +1,7 @@
 /* Independent implementation. No GPT PRO code or runtime bridge is used. */
 var PaperWebAssistant = (() => {
   const ID='paper-web-assistant@local.customization', PREF='extensions.paperWebAssistant.', HTML='http://www.w3.org/1999/xhtml';
-  const WEB_BUILD='20261027-page-translation-r15';
+  const WEB_BUILD='20261102-translation-only-r16';
   const panels=new Map(), injected=new Set(), readers=new Map(), workspaces=new Map();
   let chromeHandle, paneID, timer, commands=[], defaults=[], running=false, activeRun=null, uiCSS='', sessionSerial=0;
   const get=(k,d)=>{try{return Zotero.Prefs.get(PREF+k,true)??d;}catch(_){return d;}};
@@ -1056,7 +1056,10 @@ var PaperWebAssistant = (() => {
     const capture={reader:r,annotation,text:annotation.text||'',key};
     const invoke=async(write)=>{const s=await show();return run(s,{capture:snapshotCapture(capture),command:commands[Number(picker.value)],write,question:''});};
     box.append(picker);
-    for(const [name,mode]of [['翻译/标注','append'],['仅问答','answer'],['写入笔记','note']]){const b=el(doc,'button',name);b.style.cssText='font:12px system-ui;padding:4px;border:1px solid #bbb;border-radius:4px;cursor:pointer';readerAction(b,()=>invoke(mode).catch(e=>Services.prompt.alert(Zotero.getMainWindow(),'Paper GPT',e.message)));box.append(b);}return box;
+    const buttons=new Map();
+    for(const [name,mode]of [['翻译并标注','append'],['仅翻译','answer'],['写入笔记','note']]){const b=el(doc,'button',name);b.type='button';b.dataset.paperGptWrite=mode;b.style.cssText='font:12px system-ui;padding:4px;border:1px solid #bbb;border-radius:4px;cursor:pointer';readerAction(b,()=>invoke(mode).catch(e=>Services.prompt.alert(Zotero.getMainWindow(),'Paper GPT',e.message)));box.append(b);buttons.set(mode,b);}
+    const labels=()=>{const translation=/翻译|translate/i.test(commands[Number(picker.value)]?.name||'');buttons.get('append').textContent=translation?'翻译并标注':'执行并标注';buttons.get('append').title='执行所选指令，并将回复写入原文下划线标注';buttons.get('answer').textContent=translation?'仅翻译':'仅问答';buttons.get('answer').title=translation?'仅在对话框显示译文，不新增或修改标注，也不写入笔记':'仅在对话框显示回复，不新增或修改标注，也不写入笔记';buttons.get('note').title='执行所选指令，并将回复保存为笔记';};
+    picker.addEventListener('change',labels);labels();return box;
   }
   const selectionHook=({reader:r,doc,params,append})=>{if(params.annotation?.text)append(quick(doc,r,params.annotation));};
   const toolbarHook=({doc,append})=>{const b=el(doc,'button');const icon=el(doc,'img');icon.src='chrome://paper-web-assistant/content/icon.svg';icon.alt='';icon.setAttribute('aria-hidden','true');icon.style.cssText='width:16px;height:16px;vertical-align:middle;margin-right:5px';b.append(icon,doc.createTextNode('Paper GPT'));b.className='pwa-toolbar toolbar-button';b.style.cssText='width:auto;min-width:52px;padding:0 6px';readerAction(b,()=>show().catch(e=>Services.prompt.alert(Zotero.getMainWindow(),'Paper GPT',e.message)));append(b);injected.add(b);};
@@ -1256,6 +1259,6 @@ var PaperWebAssistant = (() => {
     show,run,selection,context,writeAnnotation,saveNote,locate,tool,
     get commands(){return commands;},
     get panels(){return [...panels.values()];},
-    diagnostics(){return {version:'1.6.8',webBuild:WEB_BUILD,compatibility:PaperZoteroCompat.diagnostics(),paneID,commands:commands.length,panels:[...panels.values()].map(s=>({visible:panelVisible(s),deferred:!!s.deferredURL,background:!!s.backgroundCheck,navigationCount:s.navigationCount||0,status:s.status.textContent,url:s.browser.currentURI?.spec})),busy:!!activeRun};}
+    diagnostics(){return {version:'1.6.9',webBuild:WEB_BUILD,compatibility:PaperZoteroCompat.diagnostics(),paneID,commands:commands.length,panels:[...panels.values()].map(s=>({visible:panelVisible(s),deferred:!!s.deferredURL,background:!!s.backgroundCheck,navigationCount:s.navigationCount||0,status:s.status.textContent,url:s.browser.currentURI?.spec})),busy:!!activeRun};}
   };
 })();
