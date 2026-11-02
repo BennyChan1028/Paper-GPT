@@ -1,7 +1,7 @@
 /* Independent implementation. No GPT PRO code or runtime bridge is used. */
 var PaperWebAssistant = (() => {
   const ID='paper-web-assistant@local.customization', PREF='extensions.paperWebAssistant.', HTML='http://www.w3.org/1999/xhtml';
-  const WEB_BUILD='20261102-pdf-export-r18';
+  const WEB_BUILD='20261102-common-r19';
   const panels=new Map(), injected=new Set(), readers=new Map(), workspaces=new Map();
   let chromeHandle, paneID, timer, commands=[], defaults=[], running=false, activeRun=null, uiCSS='', sessionSerial=0;
   const get=(k,d)=>{try{return Zotero.Prefs.get(PREF+k,true)??d;}catch(_){return d;}};
@@ -628,20 +628,51 @@ var PaperWebAssistant = (() => {
     s.commandToggle?.style.setProperty('--pwa-command-width',width+'px');
   }
   function closeCommands(s,focus=false){if(!s.commandMenu)return;s.commandMenu.hidden=true;s.commandToggle.setAttribute('aria-expanded','false');if(focus)s.commandToggle.focus();}
+  function favoriteNames(){
+    const initial=['翻译','翻译本页','全文翻译为 PDF','全文翻译','摘要总结','AI 大纲'];let names;
+    try{const saved=get('favoriteCommands',null);names=saved===null?initial:JSON.parse(saved);}catch(_){names=initial;}
+    if(!Array.isArray(names))names=initial;
+    const available=new Set(commands.map(c=>c.name));
+    return [...new Set(names.filter(name=>typeof name==='string'&&available.has(name)))];
+  }
+  function toggleFavorite(s,name){
+    if(s.busy)return;
+    const names=favoriteNames(),index=names.indexOf(name);
+    if(index>=0)names.splice(index,1);else names.push(name);
+    put('favoriteCommands',JSON.stringify(names));
+    for(const panel of new Set([...panels.values(),s]))buildCommandMenu(panel);
+  }
+  function renameFavorite(previousName,nextName){
+    if(previousName===nextName)return;
+    const names=favoriteNames();
+    if(names.includes(previousName))put('favoriteCommands',JSON.stringify([...new Set(names.map(n=>n===previousName?nextName:n))]));
+  }
   function buildCommandMenu(s){
     if(!s.commandMenu)return;
-    s.commandList.replaceChildren();s.commandChoices=[];const term=s.commandSearch.value.trim().toLocaleLowerCase(),groups=new Map();
-    commands.forEach((c,index)=>{
-      const info=PaperHelp.info(c);if(term&&!`${c.name} ${info.label} ${info.group} ${info.description}`.toLocaleLowerCase().includes(term))return;
-      let group=groups.get(info.group);
-      if(!group){group=el(s.doc,'section');group.append(el(s.doc,'h3',info.group));groups.set(info.group,group);s.commandList.append(group);}
+    const scroll=s.commandList.scrollTop;s.commandList.replaceChildren();s.commandChoices=[];
+    const term=s.commandSearch.value.trim().toLocaleLowerCase(),groups=new Map(),favorites=favoriteNames(),pinned=new Set(favorites);
+    const matches=c=>{const info=PaperHelp.info(c);return !term||`${c.name} ${info.label} ${info.group} ${info.description} ${pinned.has(c.name)?'我的常用':''}`.toLocaleLowerCase().includes(term);};
+    const section=name=>{let group=groups.get(name);if(!group){group=el(s.doc,'section');group.append(el(s.doc,'h3',name));groups.set(name,group);s.commandList.append(group);}return group;};
+    const append=(c,index,group)=>{
+      const info=PaperHelp.info(c),row=el(s.doc,'div');row.className='pwa-command-row';
       const b=el(s.doc,'button');b.type='button';b.className='pwa-command-choice';b.dataset.index=String(index);b.dataset.uiToggle='true';b.disabled=s.busy;
       b.setAttribute('aria-pressed',String(s.command.value===String(index)));b.title=info.usage;
       b.append(el(s.doc,'strong',info.label),el(s.doc,'span',info.description));
       b.addEventListener('click',()=>{if(s.busy)return;s.command.value=String(index);s.command.dispatchEvent(new s.win.Event('change'));closeCommands(s,true);});
-      group.append(b);s.commandChoices.push(b);
+      const pin=el(s.doc,'button');pin.type='button';pin.className='pwa-command-pin';pin.dataset.uiToggle='true';pin.dataset.favoriteIndex=String(index);pin.disabled=s.busy;
+      pin.setAttribute('aria-pressed',String(pinned.has(c.name)));pin.title=(pinned.has(c.name)?'从我的常用移除：':'加入我的常用：')+info.label;pin.setAttribute('aria-label',pin.title);
+      const svg=s.doc.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('aria-hidden','true');
+      const path=s.doc.createElementNS('http://www.w3.org/2000/svg','path');path.setAttribute('d','m12 3 2.78 5.63 6.22.9-4.5 4.39 1.06 6.2L12 17.19l-5.56 2.93 1.06-6.2L3 9.53l6.22-.9L12 3z');svg.append(path);pin.append(svg);
+      pin.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();if(s.busy)return;toggleFavorite(s,c.name);const buttons=s.commandList.querySelectorAll('[data-favorite-index="'+index+'"]');(buttons[buttons.length-1]||s.commandSearch).focus();});
+      row.append(b,pin);group.append(row);s.commandChoices.push(b);
+    };
+    const common=favorites.map(name=>commands.findIndex(c=>c.name===name)).filter(index=>index>=0&&matches(commands[index]));
+    if(common.length||!term){const group=section('我的常用');for(const index of common)append(commands[index],index,group);if(!favorites.length)group.append(el(s.doc,'p','点击功能右侧的星标，加入我的常用。'));}
+    commands.forEach((c,index)=>{
+      if(matches(c))append(c,index,section(PaperHelp.info(c).group));
     });
     if(!s.commandChoices.length)s.commandList.append(el(s.doc,'p','没有匹配的指令，请换一个关键词。'));
+    s.commandList.scrollTop=scroll;
   }
   function openCommands(s){
     if(s.busy)return;if(!s.commandMenu.hidden){closeCommands(s);return;}
@@ -685,7 +716,7 @@ var PaperWebAssistant = (() => {
     const scope=s.scope.cloneNode(true);scope.value=c.scope;
     const text=el(s.doc,'textarea');text.value=c.text;text.style.cssText='display:block;width:100%;min-height:120px;box-sizing:border-box';text.setAttribute('aria-label','提示词内容');
     s.result.append(el(s.doc,'p','编辑当前指令。{content} 代表材料，{question} 代表问题；不写占位符会自动附上材料。'),name,scope,text);
-    for(const [label,add]of [['保存当前指令',false],['另存为新指令',true]]){const b=el(s.doc,'button',label);b.onclick=()=>{if(!name.value.trim()||!text.value.trim()){status(s,'名称和提示词不能为空。');return;}const value={name:name.value.trim(),scope:scope.value,text:text.value};if(add)commands.push(value);else commands[index]=value;put('commands',JSON.stringify(commands));for(const p of panels.values())refreshCommands(p);status(s,'提示词已保存，重启后保留。');};s.result.append(b);}
+    for(const [label,add]of [['保存当前指令',false],['另存为新指令',true]]){const b=el(s.doc,'button',label);b.onclick=()=>{if(!name.value.trim()||!text.value.trim()){status(s,'名称和提示词不能为空。');return;}const value={name:name.value.trim(),scope:scope.value,text:text.value};if(add)commands.push(value);else{renameFavorite(commands[index]?.name,value.name);commands[index]=value;}put('commands',JSON.stringify(commands));for(const p of panels.values())refreshCommands(p);status(s,'提示词已保存，重启后保留。');};s.result.append(b);}
     const close=el(s.doc,'button','关闭');close.onclick=()=>s.result.hidden=true;s.result.append(close);
   }
   function navigateSession(s,url){
@@ -1046,7 +1077,7 @@ var PaperWebAssistant = (() => {
     s.commandMenu.addEventListener('keydown',e=>{
       if(e.key==='Escape'){e.preventDefault();e.stopPropagation();closeCommands(s,true);return;}
       if(!['ArrowDown','ArrowUp','Home','End'].includes(e.key)||e.target===s.commandSearch&&!['ArrowDown','ArrowUp'].includes(e.key))return;
-      const choices=s.commandChoices||[];if(!choices.length)return;e.preventDefault();const i=choices.indexOf(e.target);
+      const choices=s.commandChoices||[];if(!choices.length)return;e.preventDefault();const i=choices.indexOf(e.target.closest?.('.pwa-command-row')?.querySelector('.pwa-command-choice')||e.target);
       const next=e.key==='Home'?0:e.key==='End'?choices.length-1:e.key==='ArrowDown'?(i+1)%choices.length:(i<=0?choices.length-1:i-1);choices[next].focus();
     });
     s.root.addEventListener('pointerdown',e=>{if(!s.commandMenu.hidden&&!s.commandMenu.contains(e.target)&&!s.commandToggle.contains(e.target))closeCommands(s);},true);
@@ -1270,6 +1301,6 @@ var PaperWebAssistant = (() => {
     show,run,selection,context,writeAnnotation,saveNote,locate,tool,
     get commands(){return commands;},
     get panels(){return [...panels.values()];},
-    diagnostics(){return {version:'1.6.11',webBuild:WEB_BUILD,compatibility:PaperZoteroCompat.diagnostics(),paneID,commands:commands.length,panels:[...panels.values()].map(s=>({visible:panelVisible(s),deferred:!!s.deferredURL,background:!!s.backgroundCheck,navigationCount:s.navigationCount||0,status:s.status.textContent,url:s.browser.currentURI?.spec})),busy:!!activeRun};}
+    diagnostics(){return {version:'1.6.12',webBuild:WEB_BUILD,compatibility:PaperZoteroCompat.diagnostics(),paneID,commands:commands.length,panels:[...panels.values()].map(s=>({visible:panelVisible(s),deferred:!!s.deferredURL,background:!!s.backgroundCheck,navigationCount:s.navigationCount||0,status:s.status.textContent,url:s.browser.currentURI?.spec})),busy:!!activeRun};}
   };
 })();

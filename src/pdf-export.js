@@ -52,19 +52,24 @@ var PaperPDFExport = (() => {
     if(!python||!PathUtils.isAbsolute(python)||!await IOUtils.exists(python))throw new Error('中文 PDF 排版组件尚未就绪。请先运行分享包中的“安装 PDF 导出组件”，然后重试。');
     return {python,assets:value.assets||PathUtils.join(Zotero.DataDirectory.dir,'paper-gpt','pdf-assets')};
   }
-  async function chooseDestination(attachment,win) {
-    const {FilePicker}=ChromeUtils.importESModule('chrome://zotero/content/modules/filePicker.mjs');
-    const picker=new FilePicker();picker.init(win,'另存为中文 PDF',picker.modeSave);
-    const name=PathUtils.filename(await attachment.getFilePathAsync()).replace(/\.pdf$/i,'');
-    picker.defaultString=name+'-中文.pdf';picker.defaultExtension='pdf';picker.appendFilter('PDF','*.pdf');
-    if(await picker.show()===picker.returnCancel)return null;
-    return picker.file;
+  async function defaultDestination(input) {
+    let name=PathUtils.filename(input).replace(/\.pdf$/i,'')||'文献';
+    if(!name.startsWith('中文-'))name='中文-'+name;
+    // Leave room for a numeric suffix on filesystems with a 255-character limit.
+    if(name.length>240)name=name.slice(0,240).replace(/[\uD800-\uDBFF]$/,'');
+    const directory=PathUtils.parent(input);
+    for(let n=1;n<=9999;n++){
+      const path=PathUtils.join(directory,name+(n===1?'':' ('+n+')')+'.pdf');
+      if(!await IOUtils.exists(path))return path;
+    }
+    throw new Error('原 PDF 目录中同名中文文件过多，请先整理输出文件。');
   }
   async function run({attachment,win,ask,check,progress,budget=8000,destination}) {
     if(!attachment?.isPDFAttachment?.())throw new Error('请先打开要翻译的 PDF。');
     const input=await attachment.getFilePathAsync();if(!input||!await IOUtils.exists(input))throw new Error('原 PDF 文件不在本机，请先下载附件。');
     const env=await runtime();check();
-    destination=destination||await chooseDestination(attachment,win);if(!destination)return {cancelled:true};
+    const automatic=!destination;
+    destination=destination||await defaultDestination(input);
     if(!PathUtils.isAbsolute(destination)||canonical(input)===canonical(destination))throw new Error('请使用新的中文 PDF 文件名，不能覆盖原文。');
     if(await IOUtils.exists(destination))throw new Error('所选文件已存在，请换一个文件名，避免覆盖已有 PDF。');
     const data=PathUtils.join(Zotero.DataDirectory.dir,'paper-gpt','pdf-export');await IOUtils.makeDirectory(data,{ignoreExisting:true,createAncestors:true});
@@ -92,6 +97,7 @@ var PaperPDFExport = (() => {
           if(typeof result.output!=='string'||!canonical(result.output).startsWith(outputRoot)||!await IOUtils.exists(result.output))throw new Error('排版引擎返回的输出路径无效。');
           check();
           if(await IOUtils.computeHexDigest(input,'sha256')!==hash)throw new Error('导出期间原 PDF 文件已改变，请重新运行。');
+          if(automatic&&await IOUtils.exists(destination))destination=await defaultDestination(input);
           // An atomic, no-overwrite copy publishes only a fully validated PDF.
           await IOUtils.copy(result.output,destination,{noOverwrite:true});published=true;
           await waiting;await output;
@@ -126,5 +132,5 @@ var PaperPDFExport = (() => {
       processes.delete(process);
     }
   }
-  return {configure(uri){rootURI=uri;},async stop(){await Promise.allSettled([...processes].map(async([p,job])=>{await writeJSON(PathUtils.join(job,'cancel.json'),{cancelled:true}).catch(()=>{});try{p.kill();}catch(_){}}));processes.clear();},diagnostics(){return {activeProcesses:processes.size};},run,translate,split,prompt,runtime};
+  return {configure(uri){rootURI=uri;},async stop(){await Promise.allSettled([...processes].map(async([p,job])=>{await writeJSON(PathUtils.join(job,'cancel.json'),{cancelled:true}).catch(()=>{});try{p.kill();}catch(_){}}));processes.clear();},diagnostics(){return {activeProcesses:processes.size};},run,translate,split,prompt,runtime,defaultDestination};
 })();

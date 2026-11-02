@@ -60,3 +60,4 @@
 
 /* Title plus one live status line. Session proof remains internal. */
 .pwa-paper-context .pwa-activity{padding:0;margin-top:3px;border:0;min-height:20px;font-weight:400;background:transparent}
+.pwa-command-row{display:flex;align-items:stretch;gap:4px;margin:4px 0;min-width:0}.pwa-root .pwa-command-row .pwa-command-choice{flex:1 1 0;min-width:0;width:auto;margin:0}.pwa-root .pwa-command-pin{flex:0 0 34px;align-self:center;width:34px;min-height:34px;padding:6px;border-color:transparent;background:transparent;color:var(--pwa-muted)}.pwa-command-pin svg{display:block;width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linejoin:round}.pwa-root .pwa-command-pin[aria-pressed="true"]{color:var(--pwa-accent)}.pwa-command-pin[aria-pressed="true"] svg{fill:currentColor}.pwa-command-list section>p{font-size:12px;line-height:1.6;color:var(--pwa-muted);margin:8px 6px}
