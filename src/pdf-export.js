@@ -130,11 +130,17 @@ var PaperPDFExport = (() => {
     const hash=await IOUtils.computeHexDigest(input,'sha256'),cache=PathUtils.join(data,'cache',hash);
     const id=Services.uuid.generateUUID().toString().replace(/[{}]/g,''),job=PathUtils.join(data,'jobs',id);
     await IOUtils.makeDirectory(job,{ignoreExisting:true,createAncestors:true});
-    const worker=PathUtils.join(job,'worker.py');await IOUtils.writeUTF8(worker,await Zotero.File.getResourceAsync(rootURI+'pdf-export-worker.py'));
-    await writeJSON(PathUtils.join(job,'config.json'),{input,assets:env.assets,cache});
+    // Keep native rendering paths short even for long paper names/data folders.
+    const workspace=PathUtils.join(PathUtils.tempDir,'pgpdf-'+id);
+    const worker=PathUtils.join(job,'worker.py');
     const {Subprocess}=ChromeUtils.importESModule('resource://gre/modules/Subprocess.sys.mjs');
-    let process,finished=false,exit,log='',handled=new Set(),published=false;
+    let process,finished=false,exit,log='',handled=new Set(),published=false,workspaceCreated=false;
     try{
+      await IOUtils.makeDirectory(workspace,{ignoreExisting:false});
+      workspaceCreated=true;
+      await IOUtils.writeUTF8(worker,await Zotero.File.getResourceAsync(rootURI+'pdf-export-worker.py'));
+      await writeJSON(PathUtils.join(job,'config.json'),{input,assets:env.assets,cache,workspace});
+      check();
       progress('中文 PDF · 正在启动本机排版引擎…');
       process=await Subprocess.call({command:env.python,arguments:['-X','utf8','-u',worker,'--job',job],stderr:'stdout'});
       processes.set(process,job);
@@ -195,6 +201,12 @@ var PaperPDFExport = (() => {
       }
       if(!published)progress('中文 PDF 未生成；已完成段落保留在本机，下次可继续。');
       processes.delete(process);
+      // This exact directory was allocated by this run under the OS temp dir.
+      // Never derive recursive cleanup from a path returned by the worker.
+      if(workspaceCreated)for(let attempt=0;attempt<5;attempt++){
+        try{await IOUtils.remove(workspace,{recursive:true,ignoreAbsent:true});break;}
+        catch(e){if(attempt===4)Zotero.logError(e);else await Zotero.Promise.delay(200);}
+      }
     }
   }
   return {configure(uri){rootURI=uri;},async stop(){await Promise.allSettled([...processes].map(async([p,job])=>{await writeJSON(PathUtils.join(job,'cancel.json'),{cancelled:true}).catch(()=>{});try{p.kill();}catch(_){}}));processes.clear();},diagnostics(){return {activeProcesses:processes.size};},run,registerPDF,translate,translatePage,pageBatches,pagePrompt,split,prompt,runtime,defaultDestination};

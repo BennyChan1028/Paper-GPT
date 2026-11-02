@@ -1,4 +1,4 @@
-const PAPER_WEB_ACTOR_BUILD='20261103-pdf-import-r21';
+const PAPER_WEB_ACTOR_BUILD='20261103-short-path-r22';
 export class PaperWebChild extends JSWindowActorChild {
   didDestroy(){
     this.cancelled=true;this.disposed=true;

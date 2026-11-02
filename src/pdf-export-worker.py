@@ -4,7 +4,7 @@ No translation API, browser cookies, account tokens or network listener are used
 BabelDOC is an independently installed AGPL-3.0 dependency; see THIRD_PARTY.md.
 """
 from pathlib import Path
-import argparse,contextlib,hashlib,json,logging,os,re,sys,threading,time,uuid
+import argparse,contextlib,hashlib,json,logging,os,re,shutil,sys,tempfile,threading,time,uuid
 
 ENGINE_VERSION='0.6.4'
 def fs_path(path):
@@ -137,6 +137,17 @@ def probe():
     return {'ready':True,'engine':'BabelDOC','version':version,'python':sys.executable}
 
 def export(config,job):
+    # Native PDF tools may not handle long Windows paths. The original title
+    # must never become a repeated directory/file component in their workspace.
+    context=contextlib.nullcontext(config['workspace']) if config.get('workspace') else tempfile.TemporaryDirectory(prefix='pgpdf-',ignore_cleanup_errors=True)
+    with context as directory:
+        workspace=Path(directory).resolve()
+        workspace.mkdir(parents=True,exist_ok=True)
+        staged=workspace/'input.pdf'
+        shutil.copyfile(fs_path(config['input']),fs_path(staged))
+        return export_in_workspace(config,job,workspace,staged)
+
+def export_in_workspace(config,job,workspace,staged):
     configure_assets(config['assets'])
     from babeldoc.format.pdf.translation_config import TranslationConfig,WatermarkOutputMode
     from babeldoc.format.pdf.split_manager import PageCountStrategy
@@ -194,8 +205,8 @@ def export(config,job):
         def do_translate(self,text,rate_limit_params=None):return bridge.translate(text)
         def do_llm_translate(self,text,rate_limit_params=None):raise NotImplementedError
     init()
-    tc=TranslationConfig(translator=WebTranslator(),input_file=config['input'],lang_in='en',lang_out='zh',doc_layout_model=None,
-        output_dir=str(job/'output'),working_dir=str(job/'working'),no_dual=True,no_mono=False,
+    tc=TranslationConfig(translator=WebTranslator(),input_file=str(staged),lang_in='en',lang_out='zh',doc_layout_model=None,
+        output_dir=str(workspace/'o'),working_dir=str(workspace/'w'),no_dual=True,no_mono=False,
         watermark_output_mode=WatermarkOutputMode.NoWatermark,qps=1,pool_max_workers=1,
         auto_extract_glossary=False,save_auto_extracted_glossary=False,use_rich_pbar=False,
         split_strategy=PageCountStrategy(1),report_interval=.5,min_text_length=5)
@@ -206,14 +217,21 @@ def export(config,job):
         result=do_translate(monitor,tc)
     if bridge.failed or not result:raise RuntimeError('Translation incomplete; no PDF published')
     output=Path(result.no_watermark_mono_pdf_path or result.mono_pdf_path).resolve()
-    if not output.is_relative_to((job/'output').resolve()) or not output.is_file():raise RuntimeError('Invalid output path')
-    with pymupdf.open(config['input']) as source,pymupdf.open(output) as target:
+    if not output.is_relative_to((workspace/'o').resolve()) or not output.is_file():raise RuntimeError('Invalid output path')
+    # Validate while files are still in the short workspace, then publish a
+    # short internal basename. Zotero chooses the user-facing Chinese title.
+    with pymupdf.open(staged) as source,pymupdf.open(output) as target:
         if source.page_count!=target.page_count:raise RuntimeError('Translated PDF page count changed')
         for a,b in zip(source,target):
             if any(abs(x-y)>.1 for x,y in zip(a.rect,b.rect)):raise RuntimeError('Translated PDF page dimensions changed')
         cjk=sum(len(re.findall(r'[\u3400-\u9fff]',page.get_text())) for page in target)
         if cjk<5 or bridge.completed+bridge.reused==0:raise RuntimeError('No usable Chinese translation found')
-        return {'status':'complete','output':str(output),'pages':target.page_count,'translated':bridge.completed,'reused':bridge.reused,'webRequests':bridge.web_requests,'chineseCharacters':cjk,'engine':'BabelDOC '+ENGINE_VERSION}
+        pages=target.page_count
+    published=job/'output'/'translated.pdf'
+    fs_path(published).parent.mkdir(parents=True,exist_ok=True)
+    if fs_path(published).exists():raise RuntimeError('Output already exists; refusing to overwrite')
+    shutil.copyfile(output,fs_path(published))
+    return {'status':'complete','output':str(published),'pages':pages,'translated':bridge.completed,'reused':bridge.reused,'webRequests':bridge.web_requests,'chineseCharacters':cjk,'engine':'BabelDOC '+ENGINE_VERSION}
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--probe',action='store_true');parser.add_argument('--job',type=Path)

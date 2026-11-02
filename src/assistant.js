@@ -1,7 +1,7 @@
 /* Independent implementation. No GPT PRO code or runtime bridge is used. */
 var PaperWebAssistant = (() => {
   const ID='paper-web-assistant@local.customization', PREF='extensions.paperWebAssistant.', HTML='http://www.w3.org/1999/xhtml';
-  const WEB_BUILD='20261103-pdf-import-r21';
+  const WEB_BUILD='20261103-short-path-r22';
   const panels=new Map(), injected=new Set(), readers=new Map(), workspaces=new Map();
   let chromeHandle, paneID, timer, commands=[], defaults=[], running=false, activeRun=null, uiCSS='', sessionSerial=0;
   const get=(k,d)=>{try{return Zotero.Prefs.get(PREF+k,true)??d;}catch(_){return d;}};
@@ -1308,6 +1308,6 @@ var PaperWebAssistant = (() => {
     show,run,selection,context,writeAnnotation,saveNote,locate,tool,
     get commands(){return commands;},
     get panels(){return [...panels.values()];},
-    diagnostics(){return {version:'1.6.14',webBuild:WEB_BUILD,compatibility:PaperZoteroCompat.diagnostics(),paneID,commands:commands.length,panels:[...panels.values()].map(s=>({visible:panelVisible(s),deferred:!!s.deferredURL,background:!!s.backgroundCheck,navigationCount:s.navigationCount||0,status:s.status.textContent,url:s.browser.currentURI?.spec})),busy:!!activeRun};}
+    diagnostics(){return {version:'1.6.15',webBuild:WEB_BUILD,compatibility:PaperZoteroCompat.diagnostics(),paneID,commands:commands.length,panels:[...panels.values()].map(s=>({visible:panelVisible(s),deferred:!!s.deferredURL,background:!!s.backgroundCheck,navigationCount:s.navigationCount||0,status:s.status.textContent,url:s.browser.currentURI?.spec})),busy:!!activeRun};}
   };
 })();
