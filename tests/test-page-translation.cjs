@@ -32,7 +32,7 @@ const pageCommand={name:'翻译本页',scope:'pageTranslation',text:'translate'}
 async function main(){
  const old=annotation(1,'Old translated text'),other=annotation(0,'Other page translation'),manual=annotation(1,'Manual annotation',false),s=panel();
  afterSend=()=>{app.page=3};const result=await api.run(s,{command:pageCommand});afterSend=null;
- assert.deepEqual(reads,[1]);assert(result.includes('第 2 页'));assert.equal(records.filter(a=>a.getTags().length&&JSON.parse(a.annotationPosition).pageIndex===1).length,7);assert(records.includes(manual)&&records.includes(other));assert(!records.includes(old));assert(requests.length>1,'dense current page is split into bounded batches');
+ assert.deepEqual(reads,[1]);assert(result.includes('第 2 页'));assert.equal(records.filter(a=>a.getTags().length&&JSON.parse(a.annotationPosition).pageIndex===1).length,7);assert(records.includes(manual)&&records.includes(other));assert(!records.includes(old));assert.equal(requests.length,1,'all seven short paragraphs share one page request');
  assert(events.indexOf('write:1')>events.lastIndexOf('send'),'page is collected before writing');assert(records.filter(a=>!['Original comment'].includes(a.annotationComment)).every(a=>JSON.parse(a.annotationPosition).pageIndex===1),'changing visible page mid-reply cannot change target');
  app.page=2;const currentIDs=records.map(a=>a.id);badReply=true;await assert.rejects(api.run(s,{command:pageCommand}));badReply=false;assert.deepEqual(records.map(a=>a.id),currentIDs,'failed response keeps old translations');
  failWrite=true;await assert.rejects(api.run(s,{command:pageCommand}),/database write failed/);failWrite=false;assert.deepEqual(records.map(a=>a.id),currentIDs,'database failure rolls deletion back');

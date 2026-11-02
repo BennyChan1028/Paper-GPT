@@ -36,38 +36,66 @@ class FileBridge:
     def __init__(self,job,cache):
         self.job=fs_path(job);self.queue=self.job/'queue';self.queue.mkdir(exist_ok=True)
         self.cache=fs_path(cache);self.cache.mkdir(parents=True,exist_ok=True)
-        self.lock=threading.Lock();self.failed=False;self.completed=0;self.reused=0
+        self.lock=threading.Lock();self.failed=False;self.completed=0;self.reused=0;self.web_requests=0
     def cancelled(self):return (self.job/'cancel.json').exists()
-    def translate(self,text):
-        if not text:return text
-        if self.cancelled():raise RuntimeError('Export cancelled')
-        key=hashlib.sha256(('paper-gpt-web-v1\0'+text).encode()).hexdigest()
-        cached=self.cache/(key+'.json')
-        if cached.exists():
-            saved=json.loads(cached.read_text('utf8'))
-            if saved.get('source')==text and saved.get('translation'):
-                self.reused+=1;return saved['translation']
+    @staticmethod
+    def key(text):return hashlib.sha256(('paper-gpt-web-v1\0'+text).encode()).hexdigest()
+    @staticmethod
+    def tokens(text):return sorted(re.findall(r'</?b\d+>',text))
+    def translate(self,text):return self.translate_page([text],None)[0] if text else text
+    def translate_page(self,texts,page):
         with self.lock:
             if self.cancelled():raise RuntimeError('Export cancelled')
+            values={};missing={}
+            for text in texts:
+                key=self.key(text)
+                if key in values:self.reused+=1;continue
+                cached=self.cache/(key+'.json')
+                if cached.exists():
+                    saved=json.loads(cached.read_text('utf8'))
+                    value=saved.get('translation')
+                    if saved.get('source')==text and isinstance(value,str) and value.strip() and self.tokens(text)==self.tokens(value):
+                        values[key]=value;self.reused+=1;continue
+                missing[key]={'id':key[:24],'text':text}
+            if not missing:return [values[self.key(text)] for text in texts]
             request_id=uuid.uuid4().hex;request=self.queue/(request_id+'.request.json');reply=self.queue/(request_id+'.reply.json')
-            atomic_json(request,{'id':request_id,'text':text,'mode':'translation'})
+            atomic_json(request,{'id':request_id,'items':list(missing.values()),'page':page,'mode':'page-translation'})
+            expected={item['id']:(key,item['text']) for key,item in missing.items()};accepted={}
+            if len(expected)!=len(missing):raise RuntimeError('Page paragraph ID collision')
+            def accept(rows,partial=False):
+                if not isinstance(rows,list):raise RuntimeError('Missing page translations')
+                seen=set()
+                for row in rows:
+                    rid=row.get('id');value=row.get('translation')
+                    if rid not in expected or rid in seen or not isinstance(value,str) or not value.strip():raise RuntimeError('Invalid page translation ID or content')
+                    seen.add(rid)
+                    if self.tokens(expected[rid][1])!=self.tokens(value):raise RuntimeError('Formula/style placeholders changed; PDF not published')
+                    if rid in accepted and accepted[rid]!=value.strip():raise RuntimeError('Completed page translation changed')
+                if not partial and seen!=set(expected):raise RuntimeError('Incomplete page translation')
+                for row in rows:
+                    rid=row['id']
+                    if rid in accepted:continue
+                    key,text=expected[rid];value=row['translation'].strip()
+                    atomic_json(self.cache/(key+'.json'),{'source':text,'translation':value})
+                    accepted[rid]=value;values[key]=value;self.completed+=1
             until=time.monotonic()+900
-            while not reply.exists():
-                if self.cancelled() or time.monotonic()>until:
-                    self.failed=True;raise RuntimeError('Export cancelled or webpage reply timed out; no PDF published')
-                time.sleep(.15)
-            result=json.loads(reply.read_text('utf8'))
-            if result.get('id')!=request_id or result.get('error') or not isinstance(result.get('translation'),str) or not result['translation'].strip():
-                self.failed=True;raise RuntimeError(result.get('error') or 'Invalid webpage translation')
-            value=result['translation'].strip()
-            # Formula/style placeholders are part of the original layout, not prose.
-            tokens=lambda s:sorted(re.findall(r'</?b\d+>',s))
-            if tokens(text)!=tokens(value):
-                self.failed=True;raise RuntimeError('Formula/style placeholders changed; PDF not published')
-            try:atomic_json(cached,{'source':text,'translation':value})
+            checkpoint=self.queue/(request_id+'.partial.json');last_checkpoint=''
+            try:
+                while True:
+                    if self.cancelled() or time.monotonic()>until:raise RuntimeError('Export cancelled or webpage reply timed out; no PDF published')
+                    if checkpoint.exists():
+                        content=checkpoint.read_text('utf8')
+                        if content!=last_checkpoint:
+                            part=json.loads(content)
+                            if part.get('id')!=request_id:raise RuntimeError('Invalid checkpoint owner')
+                            accept(part.get('translations'),True);last_checkpoint=content
+                    if reply.exists():break
+                    time.sleep(.15)
+                result=json.loads(reply.read_text('utf8'))
+                if result.get('id')!=request_id or result.get('error'):raise RuntimeError(result.get('error') or 'Invalid webpage reply')
+                accept(result.get('translations'));self.web_requests+=int(result.get('webRequests',1))
+                return [values[self.key(text)] for text in texts]
             except BaseException:self.failed=True;raise
-            self.completed+=1
-            return value
 
 def probe():
     import importlib.metadata
@@ -88,7 +116,7 @@ def export(config,job):
     import pymupdf
     bridge=FileBridge(job,config['cache'])
     original_layout_translator=pipeline.ILTranslator
-    reference_state={'active':False}
+    reference_state={'active':False,'pages':0}
     class BodyLayoutTranslator(original_layout_translator):
         def translate(self,docs):
             self.excluded=set()
@@ -100,9 +128,33 @@ def export(config,job):
                     if reference_state['active'] or paragraph.layout_label in {'abandon','figure','table','table_footnote','isolate_formula','formula_caption'}:
                         self.excluded.add(id(paragraph))
             return super().translate(docs)
-        def translate_paragraph(self,paragraph,*args,**kwargs):
-            if id(paragraph) in self.excluded:return
-            return super().translate_paragraph(paragraph,*args,**kwargs)
+        def process_page(self,page,executor,pbar=None,tracker=None):
+            self.translation_config.raise_if_cancelled()
+            # PageCountStrategy resets page_number inside every split PDF.
+            # Parts are processed sequentially, including pages with no text.
+            reference_state['pages']+=1
+            fonts={font.font_id:font for font in page.pdf_font}
+            xfonts={x.xobj_id:{**fonts,**{font.font_id:font for font in x.pdf_font}} for x in page.pdf_xobject}
+            prepared=[]
+            for paragraph in page.pdf_paragraph:
+                if id(paragraph) in self.excluded:
+                    if pbar:pbar.advance()
+                    continue
+                row_tracker=tracker.new_paragraph()
+                text,translate_input=self.pre_translate_paragraph(paragraph,row_tracker,fonts,xfonts)
+                if text is None:
+                    if pbar:pbar.advance()
+                    continue
+                row_tracker.new_llm_translate_tracker()
+                prepared.append((paragraph,row_tracker,text,translate_input))
+            if not prepared:return
+            # Extract all eligible paragraphs first. One page becomes one web
+            # request; the web adapter splits it only if the composer budget requires it.
+            translated=bridge.translate_page([row[2] for row in prepared],reference_state['pages'])
+            for (paragraph,row_tracker,text,translate_input),value in zip(prepared,translated):
+                self.translation_config.raise_if_cancelled()
+                self.post_translate_paragraph(paragraph,row_tracker,translate_input,value)
+                if pbar:pbar.advance()
     # Keep excluded elements in the document IL so they render unchanged.
     pipeline.ILTranslator=BodyLayoutTranslator
     class WebTranslator(BaseTranslator):
@@ -131,7 +183,7 @@ def export(config,job):
             if any(abs(x-y)>.1 for x,y in zip(a.rect,b.rect)):raise RuntimeError('Translated PDF page dimensions changed')
         cjk=sum(len(re.findall(r'[\u3400-\u9fff]',page.get_text())) for page in target)
         if cjk<5 or bridge.completed+bridge.reused==0:raise RuntimeError('No usable Chinese translation found')
-        return {'status':'complete','output':str(output),'pages':target.page_count,'translated':bridge.completed,'reused':bridge.reused,'chineseCharacters':cjk,'engine':'BabelDOC '+ENGINE_VERSION}
+        return {'status':'complete','output':str(output),'pages':target.page_count,'translated':bridge.completed,'reused':bridge.reused,'webRequests':bridge.web_requests,'chineseCharacters':cjk,'engine':'BabelDOC '+ENGINE_VERSION}
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--probe',action='store_true');parser.add_argument('--job',type=Path)

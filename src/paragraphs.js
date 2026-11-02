@@ -1,7 +1,7 @@
 /* Paragraph coordinates are computed locally from Zotero's PDF character data. */
 var PaperParagraphs=(()=>{
   const tag='Paper GPT 全文翻译';
-  const chunkLimit=1800,promptLimit=4000;
+  const chunkLimit=8000,promptLimit=8000;
   const normalized=text=>String(text||'').replace(/\s+/g,' ').trim();
   const valid=c=>Array.isArray(c.rect)&&c.rect.length===4&&c.rect.every(Number.isFinite)&&c.rect[2]>c.rect[0]&&c.rect[3]>c.rect[1];
   function rects(chars){
@@ -103,13 +103,14 @@ var PaperParagraphs=(()=>{
       if(reason)excluded.push(...g.parts.map(p=>({id:p.id,page:g.page+1,reason})));else kept.push(...g.parts);
     }return {paragraphs:kept,excluded,inReferences};
   }
-  function pieces(p){
-    if(prompt([p]).length<=promptLimit&&p.text.length<=chunkLimit)return [p];
+  function pieces(p,maxChars=promptLimit){
+    const limit=Math.min(promptLimit,Math.floor(Number(maxChars)||promptLimit));
+    if(prompt([p]).length<=limit)return [p];
     const result=[];let text=p.text,offset=0;
     while(text){
-      let end=Math.min(chunkLimit,text.length);
+      let end=Math.min(limit,text.length);
       const candidate=()=>({...p,id:p.id+'~'+result.length,text:text.slice(0,end)});
-      while(end>0&&prompt([candidate()]).length>promptLimit)end=Math.floor(end*0.9);
+      while(end>0&&prompt([candidate()]).length>limit)end=Math.floor(end*0.9);
       if(!end)throw new Error('段落无法安全分批，尚未发送。');
       if(end<text.length){
         const prefix=text.slice(0,end),sentences=[...prefix.matchAll(/[.!?。！？][”"')\]]*(?:\s+|(?=[\u3400-\u9fff]))/g)];
@@ -124,11 +125,11 @@ var PaperParagraphs=(()=>{
     for(const [i,part] of result.entries()){part.partIndex=i;part.partCount=result.length;}
     return result;
   }
-  function batches(paragraphs){
-    const result=[];let batch=[];
-    for(const p of paragraphs.flatMap(pieces)){
-      if(prompt([p]).length>promptLimit)throw new Error('单个文字片段超出本批输入上限，尚未发送。');
-      if(batch.length&&(batch.length>=2||batch[0].annotation.position.pageIndex!==p.annotation.position.pageIndex||prompt([...batch,p]).length>promptLimit)){result.push(batch);batch=[];}
+  function batches(paragraphs,maxChars=promptLimit){
+    const result=[],limit=Math.min(promptLimit,Math.floor(Number(maxChars)||promptLimit));let batch=[];
+    for(const p of paragraphs.flatMap(p=>pieces(p,limit))){
+      if(prompt([p]).length>limit)throw new Error('单个文字片段超出本批输入上限，尚未发送。');
+      if(batch.length&&(batch[0].annotation.position.pageIndex!==p.annotation.position.pageIndex||prompt([...batch,p]).length>limit)){result.push(batch);batch=[];}
       batch.push(p);
     }if(batch.length)result.push(batch);return result;
   }

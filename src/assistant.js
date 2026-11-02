@@ -1,7 +1,7 @@
 /* Independent implementation. No GPT PRO code or runtime bridge is used. */
 var PaperWebAssistant = (() => {
   const ID='paper-web-assistant@local.customization', PREF='extensions.paperWebAssistant.', HTML='http://www.w3.org/1999/xhtml';
-  const WEB_BUILD='20261102-common-r19';
+  const WEB_BUILD='20261102-page-batch-r20';
   const panels=new Map(), injected=new Set(), readers=new Map(), workspaces=new Map();
   let chromeHandle, paneID, timer, commands=[], defaults=[], running=false, activeRun=null, uiCSS='', sessionSerial=0;
   const get=(k,d)=>{try{return Zotero.Prefs.get(PREF+k,true)??d;}catch(_){return d;}};
@@ -322,11 +322,11 @@ var PaperWebAssistant = (() => {
         if(options.draft)throw new Error('导出中文 PDF 需点击发送，译文将由本机排版引擎处理。');
         if(!currentReader)throw new Error('请先打开要翻译的 PDF。');
         const check=()=>{if(activeRun?.cancelled)throw new Error('任务已停止。');if(!currentReader._internalReader||s.sessionKey!==PaperSessions.key(target))throw new Error('PDF 已关闭或文献已切换，中文 PDF 导出已停止。');};
-        const result=await PaperPDFExport.run({attachment:target,win:s.win,budget:await inputBudget(s),check,ask:text=>ask(s,text),progress:label=>{s.translationBatchLabel='中文 PDF';status(s,label);}});
+        const result=await PaperPDFExport.run({attachment:target,win:s.win,budget:async()=>{await ensureSession(s);return inputBudget(s);},check,ask:text=>ask(s,text),progress:label=>{s.translationBatchLabel=label;status(s,label);}});
         if(result.cancelled){status(s,'已取消另存中文 PDF。');return;}
         s.lastPDFExport=result;s.result.replaceChildren(el(s.doc,'strong','中文 PDF 已保存'),el(s.doc,'p',result.path));
         const open=el(s.doc,'button','打开中文 PDF');open.type='button';open.onclick=()=>Zotero.launchFile(result.path);s.result.append(open);s.result.hidden=false;
-        status(s,'中文 PDF 已保存，共 '+result.pages+' 页。原文及已有批注保留。');return result;
+        status(s,'中文 PDF 已保存，共 '+result.pages+' 页'+(Number.isInteger(result.webRequests)?'，网页发送 '+result.webRequests+' 批':'')+'。原文及已有批注保留。');return result;
       }
       if(['fullTranslation','pageTranslation'].includes(translationScope)){if(options.draft)throw new Error('逐段翻译并写入标注需点击发送。');return await translateFull(s,currentReader,{pageOnly:translationScope==='pageTranslation'});}
       await ensureSession(s);
@@ -481,7 +481,8 @@ var PaperWebAssistant = (() => {
         const oldTranslations=pageOnly?existing.filter(a=>{try{return a.getTags().some(t=>t.tag===PaperParagraphs.tag)&&JSON.parse(a.annotationPosition).pageIndex===pageIndex;}catch(_){return false;}}):[];
         if(oldTranslations.some(a=>!a.isEditable()||a.annotationIsExternal))throw new Error('本页存在只读的 Paper GPT 译文批注，未替换。');
       s.fullTranslationProgress={total,done,skipped,unreadable,excludedCount};
-      const batches=PaperParagraphs.batches(pending),partial=new Map(),translated=[];
+      await ensureSession(s);const budget=await inputBudget(s);check();
+      const batches=PaperParagraphs.batches(pending,budget),partial=new Map(),translated=[];
       for(const [batchIndex,batch] of batches.entries()){
         s.translationBatchLabel='第 '+(batch[0].annotation.position.pageIndex+1)+' 页 · 批次 '+(batchIndex+1)+'/'+batches.length;
         check();status(s,label+' · '+s.translationBatchLabel+' · 已保存 '+done+' 段'+(skipped?' · 跳过已完成 '+skipped+' 段':''));
@@ -1301,6 +1302,6 @@ var PaperWebAssistant = (() => {
     show,run,selection,context,writeAnnotation,saveNote,locate,tool,
     get commands(){return commands;},
     get panels(){return [...panels.values()];},
-    diagnostics(){return {version:'1.6.12',webBuild:WEB_BUILD,compatibility:PaperZoteroCompat.diagnostics(),paneID,commands:commands.length,panels:[...panels.values()].map(s=>({visible:panelVisible(s),deferred:!!s.deferredURL,background:!!s.backgroundCheck,navigationCount:s.navigationCount||0,status:s.status.textContent,url:s.browser.currentURI?.spec})),busy:!!activeRun};}
+    diagnostics(){return {version:'1.6.13',webBuild:WEB_BUILD,compatibility:PaperZoteroCompat.diagnostics(),paneID,commands:commands.length,panels:[...panels.values()].map(s=>({visible:panelVisible(s),deferred:!!s.deferredURL,background:!!s.backgroundCheck,navigationCount:s.navigationCount||0,status:s.status.textContent,url:s.browser.currentURI?.spec})),busy:!!activeRun};}
   };
 })();
