@@ -126,13 +126,42 @@ var AnnotationPopupControls = (() => {
     popup.style.setProperty("transform", "none", "important");
   }
   function refresh(ctx, popup) {
-    popup.style.setProperty("--ap-font-size", read("fontSize", 18) + "px");
-    if (fitToAnnotation(ctx, popup)) return;
+    if (fitToAnnotation(ctx, popup)) { fitFont(ctx, popup); return; }
     const state = popupState(ctx, popup);
     const chromeHeight = popup.getBoundingClientRect().height - (popup.querySelector('.comment .content')?.getBoundingClientRect().height || 0);
     popup.style.setProperty("--ap-width", clamp(state.size?.width ?? read("width", 400), 240, ctx.win.innerWidth - 16) + "px");
     popup.style.setProperty("--ap-content-height", clamp(state.size?.contentHeight ?? read("contentHeight", 320), 72, ctx.win.innerHeight - chromeHeight - 16) + "px");
     if (state.position) position(ctx, popup, state.position.x, state.position.y);
+    fitFont(ctx, popup);
+  }
+  function fitFont(ctx, popup) {
+    const content = popup.querySelector('.comment .content');
+    if (!content || !content.isConnected) return;
+    // Never resize the editor underneath the caret. The next scan after blur
+    // picks up edits without observing the reader's entire document.
+    if (content === ctx.doc.activeElement || content.contains(ctx.doc.activeElement)) return;
+    const state = popupState(ctx, popup), auto = read('autoFont', 1) !== 0;
+    const width = content.clientWidth, height = content.clientHeight;
+    if (!width || !height) return;
+    const key = [width, height, auto, read('fontSize', 18), content.innerHTML].join('|');
+    if (state.fontKey === key) return;
+    state.fontKey = key;
+    const apply = size => popup.style.setProperty('--ap-font-size', size + 'px');
+    if (!auto || !content.textContent.trim()) { apply(read('fontSize', 18)); return; }
+    const top = content.scrollTop, left = content.scrollLeft;
+    // Measure the real wrapped DOM (including Chinese, formulas and rich text),
+    // not an estimated character count. Integer binary search is at most 7 probes.
+    let low = 14, high = 96, best = 14;
+    while (low <= high) {
+      const size = Math.floor((low + high) / 2);
+      apply(size);
+      if (content.scrollHeight <= height + 1 && content.scrollWidth <= width + 1) {
+        best = size; low = size + 1;
+      } else high = size - 1;
+    }
+    apply(best);
+    content.scrollTop = top; content.scrollLeft = left;
+    state.fontSize = best;
   }
   function refreshAll() {
     for (const ctx of contexts.values()) {
@@ -201,6 +230,7 @@ var AnnotationPopupControls = (() => {
         popup.style.setProperty("--ap-width", clamp(start.width + dx, 240, ctx.win.innerWidth - start.x - 8) + "px");
         popup.style.setProperty("--ap-content-height", clamp(contentHeight + dy, 72, ctx.win.innerHeight - start.y - (start.height - contentHeight) - 8) + "px");
         position(ctx, popup, start.x, start.y);
+        fitFont(ctx, popup);
       }
     };
     const finish = e => {
@@ -239,7 +269,7 @@ var AnnotationPopupControls = (() => {
     const scan = () => {
       for (const [header, cleanup] of ctx.headerCleanup) if (!header.isConnected) { cleanup(); ctx.headerCleanup.delete(header); }
       for (const popup of ctx.doc.querySelectorAll(".annotation-popup")) attachPopup(ctx, popup);
-      if (!ctx.cancelGesture) for (const popup of ctx.doc.querySelectorAll('.annotation-popup.ap-enhanced')) fitToAnnotation(ctx, popup);
+      if (!ctx.cancelGesture) for (const popup of ctx.doc.querySelectorAll('.annotation-popup.ap-enhanced')) { fitToAnnotation(ctx, popup); fitFont(ctx, popup); }
       for (const group of ctx.doc.querySelectorAll(".context-menu .group")) {
         if (![...group.querySelectorAll(".row.basic")].some(node => node.textContent.startsWith("译文字号"))) continue;
         const label = group.querySelector(".row.slider > div:first-child");
@@ -280,8 +310,11 @@ var AnnotationPopupControls = (() => {
   function menuHandler({ reader, append }) {
     ensureReader(reader);
     const current = read("fontSize", 18);
-    const setFont = size => { write("fontSize", size); refreshAll(); };
+    const setFont = size => { write("fontSize", size); write('autoFont', 0); refreshAll(); };
     append({
+      label: '自动放大译文以适应翻译框', checked: read('autoFont', 1) !== 0,
+      onCommand() { write('autoFont', read('autoFont', 1) ? 0 : 1); refreshAll(); }
+    }, {
       label: "译文字号（" + current + "）…",
       onCommand() {
         const result = { value: String(read("fontSize", 18)) };
