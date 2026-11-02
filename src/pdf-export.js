@@ -2,6 +2,7 @@
 var PaperPDFExport = (() => {
   let rootURI = '';
   const processes=new Map();
+  const registrations=new Map();
   const prefix = 'extensions.paperWebAssistant.';
   const readJSON = async path => JSON.parse(await IOUtils.readUTF8(path));
   const writeJSON = (path,value) => IOUtils.writeUTF8(path,JSON.stringify(value),{tmpPath:path+'.tmp'});
@@ -96,6 +97,27 @@ var PaperPDFExport = (() => {
     }
     throw new Error('原 PDF 目录中同名中文文件过多，请先整理输出文件。');
   }
+  async function registerPDF(attachment,path) {
+    const key=attachment.libraryID+':'+(attachment.parentID||attachment.id)+':'+canonical(path);
+    if(registrations.has(key))return registrations.get(key);
+    const pending=(async()=>{
+      if(attachment.deleted)throw new Error('原文附件已在回收站中。');
+      const library=Zotero.Libraries.get(attachment.libraryID);
+      if(!library?.editable||!library.filesEditable)throw new Error('当前文库不允许添加文件附件。');
+      const options={file:path,libraryID:attachment.libraryID,contentType:'application/pdf',title:PathUtils.filename(path).replace(/\.pdf$/i,'')};
+      if(attachment.parentID){
+        const parent=Zotero.Items.get(attachment.parentID);
+        if(!parent||parent.deleted||!parent.isRegularItem()||!parent.isEditable())throw new Error('原论文条目不可编辑或已删除。');
+        options.parentItemID=parent.id;
+      }else options.collections=attachment.getCollections();
+      // Use a managed attachment so Zotero can sync and maintain the PDF.
+      // importFromFile copies it; the saved PDF beside the original is retained.
+      const item=await Zotero.Attachments.importFromFile(options);
+      return item.id;
+    })();
+    registrations.set(key,pending);
+    try{return await pending;}finally{registrations.delete(key);}
+  }
   async function run({attachment,win,ask,check,progress,budget=8000,destination}) {
     if(!attachment?.isPDFAttachment?.())throw new Error('请先打开要翻译的 PDF。');
     const input=await attachment.getFilePathAsync();if(!input||!await IOUtils.exists(input))throw new Error('原 PDF 文件不在本机，请先下载附件。');
@@ -133,8 +155,11 @@ var PaperPDFExport = (() => {
           // An atomic, no-overwrite copy publishes only a fully validated PDF.
           await IOUtils.copy(result.output,destination,{noOverwrite:true});published=true;
           await waiting;await output;
-          progress('中文 PDF 已保存 · '+result.pages+' 页 · '+destination);
-          return {...result,path:destination,job};
+          let attachmentID,registrationError;
+          try{attachmentID=await registerPDF(attachment,destination);}
+          catch(e){registrationError=e.message;Zotero.logError(e);}
+          progress(attachmentID?'中文 PDF 已保存并添加到 Zotero · '+result.pages+' 页':'中文 PDF 已保存，添加附件失败：'+registrationError);
+          return {...result,path:destination,job,attachmentID,registrationError};
         }
         if(finished){await output;throw new Error('本机排版引擎提前退出（'+exit+'）。'+(log?' '+log:''));}
         const queue=PathUtils.join(job,'queue');
@@ -154,7 +179,9 @@ var PaperPDFExport = (() => {
         }
         const progressFile=PathUtils.join(job,'progress.json');
         if(await IOUtils.exists(progressFile)){
-          const p=await readJSON(progressFile);maxPercent=Math.max(maxPercent,Math.min(99,Math.round(Number(p.percent)||0)));
+          // A transient progress read error must not abort translation either.
+          let p;try{p=await readJSON(progressFile);}catch(_){await Zotero.Promise.delay(200);continue;}
+          maxPercent=Math.max(maxPercent,Math.min(99,Math.round(Number(p.percent)||0)));
           const text='中文 PDF · '+(stages[p.stage]||'处理排版')+' · '+maxPercent+'% · 已翻译 '+(p.completed||0)+' 段'+(p.reused?' · 复用 '+p.reused+' 段':'');
           if(text!==lastProgress){lastProgress=text;progress(text);}
         }
@@ -170,5 +197,5 @@ var PaperPDFExport = (() => {
       processes.delete(process);
     }
   }
-  return {configure(uri){rootURI=uri;},async stop(){await Promise.allSettled([...processes].map(async([p,job])=>{await writeJSON(PathUtils.join(job,'cancel.json'),{cancelled:true}).catch(()=>{});try{p.kill();}catch(_){}}));processes.clear();},diagnostics(){return {activeProcesses:processes.size};},run,translate,translatePage,pageBatches,pagePrompt,split,prompt,runtime,defaultDestination};
+  return {configure(uri){rootURI=uri;},async stop(){await Promise.allSettled([...processes].map(async([p,job])=>{await writeJSON(PathUtils.join(job,'cancel.json'),{cancelled:true}).catch(()=>{});try{p.kill();}catch(_){}}));processes.clear();},diagnostics(){return {activeProcesses:processes.size};},run,registerPDF,translate,translatePage,pageBatches,pagePrompt,split,prompt,runtime,defaultDestination};
 })();

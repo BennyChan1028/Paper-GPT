@@ -23,7 +23,38 @@ def atomic_json(path,value):
     # A short sibling temp name avoids exceeding legacy Windows path limits
     # when the Zotero directory and two SHA-256 cache keys are already long.
     tmp=path.with_name('.'+uuid.uuid4().hex[:12]+'.tmp')
-    tmp.write_text(json.dumps(value,ensure_ascii=False),'utf8');os.replace(tmp,path)
+    try:
+        tmp.write_text(json.dumps(value,ensure_ascii=False),'utf8')
+        for attempt in range(7):
+            try:
+                os.replace(tmp,path)
+                break
+            except OSError as e:
+                # Windows readers and scanners can briefly deny replacement.
+                # Keep the old complete JSON visible; never delete it first.
+                if os.name!='nt' or getattr(e,'winerror',None) not in {5,32,33} or attempt==6:raise
+                time.sleep(min(.02*2**attempt,.2))
+    finally:
+        with contextlib.suppress(OSError):tmp.unlink(missing_ok=True)
+
+class ProgressWriter:
+    """Progress is optional telemetry, never a reason to abort a PDF job."""
+    def __init__(self,path,snapshot,interval=.5):
+        self.path=path;self.snapshot=snapshot;self.interval=interval
+        self.lock=threading.Lock();self.last_attempt=0;self.warned=False
+    def __call__(self,**event):
+        if not self.lock.acquire(blocking=False):return
+        try:
+            now=time.monotonic()
+            if now-self.last_attempt<self.interval:return
+            self.last_attempt=now
+            try:
+                atomic_json(self.path,{'stage':event.get('stage',''),'percent':event.get('overall_progress',0),**self.snapshot()})
+            except OSError:
+                if not self.warned:
+                    logging.warning('Progress file temporarily unavailable; PDF translation continues',exc_info=True)
+                    self.warned=True
+        finally:self.lock.release()
 
 def configure_assets(path):
     # Set before importing the rendering pipeline, whose modules copy these constants.
@@ -168,8 +199,7 @@ def export(config,job):
         watermark_output_mode=WatermarkOutputMode.NoWatermark,qps=1,pool_max_workers=1,
         auto_extract_glossary=False,save_auto_extracted_glossary=False,use_rich_pbar=False,
         split_strategy=PageCountStrategy(1),report_interval=.5,min_text_length=5)
-    def progress(**event):
-        atomic_json(job/'progress.json',{'stage':event.get('stage',''),'percent':event.get('overall_progress',0),'completed':bridge.completed,'reused':bridge.reused})
+    progress=ProgressWriter(job/'progress.json',lambda:{'completed':bridge.completed,'reused':bridge.reused})
     # Consume the synchronous result directly: the upstream async finish queue
     # can remain open after page-split merging even though the PDF is complete.
     with ProgressMonitor(get_translation_stage(tc),progress_change_callback=progress,report_interval=.5) as monitor:
