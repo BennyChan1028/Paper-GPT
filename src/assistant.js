@@ -1,7 +1,7 @@
 /* Independent implementation. No GPT PRO code or runtime bridge is used. */
 var PaperWebAssistant = (() => {
   const ID='paper-web-assistant@local.customization', PREF='extensions.paperWebAssistant.', HTML='http://www.w3.org/1999/xhtml';
-  const WEB_BUILD='20261103-fit-r23';
+  const WEB_BUILD='20261103-replace-r24';
   const panels=new Map(), injected=new Set(), readers=new Map(), workspaces=new Map();
   let chromeHandle, paneID, timer, commands=[], defaults=[], running=false, activeRun=null, uiCSS='', sessionSerial=0;
   const get=(k,d)=>{try{return Zotero.Prefs.get(PREF+k,true)??d;}catch(_){return d;}};
@@ -327,12 +327,12 @@ var PaperWebAssistant = (() => {
         s.lastPDFExport=result;const heading=el(s.doc,'strong',result.attachmentID?'中文 PDF 已添加到 Zotero':'中文 PDF 已保存');
         s.result.replaceChildren(heading,el(s.doc,'p',result.path));
         const open=el(s.doc,'button','打开中文 PDF');open.type='button';open.onclick=()=>result.attachmentID?Zotero.Reader.open(result.attachmentID):Zotero.launchFile(result.path);s.result.append(open);s.result.hidden=false;
-        if(result.registrationError){
-          const warning=el(s.doc,'p','文件已保存，自动添加附件失败：'+result.registrationError),retry=el(s.doc,'button','重新添加附件');retry.type='button';
-          retry.onclick=async()=>{retry.disabled=true;try{result.attachmentID=await PaperPDFExport.registerPDF(target,result.path);delete result.registrationError;heading.textContent='中文 PDF 已添加到 Zotero';warning.remove();retry.remove();status(s,'中文 PDF 已添加到 Zotero，无需重新翻译。');}catch(e){warning.textContent='文件已保存，添加附件失败：'+e.message;}finally{retry.disabled=false;}};
+        if(result.registrationError||result.cleanupWarning){
+          const warning=el(s.doc,'p',result.registrationError?'新版已生成，替换失败，旧版已保留：'+result.registrationError:result.cleanupWarning),retry=el(s.doc,'button',result.registrationError?'重新保存并添加':'清理旧版本');retry.type='button';
+          retry.onclick=async()=>{retry.disabled=true;try{await PaperPDFExport.retryPublication(target,result);heading.textContent='中文 PDF 已更新到 Zotero';s.result.querySelector('p').textContent=result.path;if(result.cleanupWarning){warning.textContent=result.cleanupWarning;retry.textContent='清理旧版本';}else{warning.remove();retry.remove();}status(s,result.cleanupWarning?'新版已保存，部分旧版本未清理。':'中文 PDF 已更新，旧版本已清理，无需重新翻译。');}catch(e){warning.textContent='替换未完成，旧版已保留：'+e.message;}finally{retry.disabled=false;}};
           s.result.append(warning,retry);
         }
-        status(s,result.registrationError?'中文 PDF 已保存，可点击“重新添加附件”完成登记。':'中文 PDF 已保存并添加到 Zotero，共 '+result.pages+' 页'+(Number.isInteger(result.webRequests)?'，网页发送 '+result.webRequests+' 批':'')+'。');return result;
+        status(s,result.registrationError?'新版已生成，旧版保留，可点击“重新保存并添加”。':result.cleanupWarning?'新版已保存，部分旧版本未清理。':'中文 PDF 已更新到 Zotero，共 '+result.pages+' 页'+(result.replaced?'，已清理旧中文版本':'')+'。');return result;
       }
       if(['fullTranslation','pageTranslation'].includes(translationScope)){if(options.draft)throw new Error('逐段翻译并写入标注需点击发送。');return await translateFull(s,currentReader,{pageOnly:translationScope==='pageTranslation'});}
       await ensureSession(s);
@@ -1308,6 +1308,6 @@ var PaperWebAssistant = (() => {
     show,run,selection,context,writeAnnotation,saveNote,locate,tool,
     get commands(){return commands;},
     get panels(){return [...panels.values()];},
-    diagnostics(){return {version:'1.6.16',webBuild:WEB_BUILD,compatibility:PaperZoteroCompat.diagnostics(),paneID,commands:commands.length,panels:[...panels.values()].map(s=>({visible:panelVisible(s),deferred:!!s.deferredURL,background:!!s.backgroundCheck,navigationCount:s.navigationCount||0,status:s.status.textContent,url:s.browser.currentURI?.spec})),busy:!!activeRun};}
+    diagnostics(){return {version:'1.6.17',webBuild:WEB_BUILD,compatibility:PaperZoteroCompat.diagnostics(),paneID,commands:commands.length,panels:[...panels.values()].map(s=>({visible:panelVisible(s),deferred:!!s.deferredURL,background:!!s.backgroundCheck,navigationCount:s.navigationCount||0,status:s.status.textContent,url:s.browser.currentURI?.spec})),busy:!!activeRun};}
   };
 })();

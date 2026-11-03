@@ -88,14 +88,9 @@ var PaperPDFExport = (() => {
   async function defaultDestination(input) {
     let name=PathUtils.filename(input).replace(/\.pdf$/i,'')||'文献';
     if(!name.startsWith('中文-'))name='中文-'+name;
-    // Leave room for a numeric suffix on filesystems with a 255-character limit.
+    // Leave room on filesystems with a 255-character filename limit.
     if(name.length>240)name=name.slice(0,240).replace(/[\uD800-\uDBFF]$/,'');
-    const directory=PathUtils.parent(input);
-    for(let n=1;n<=9999;n++){
-      const path=PathUtils.join(directory,name+(n===1?'':' ('+n+')')+'.pdf');
-      if(!await IOUtils.exists(path))return path;
-    }
-    throw new Error('原 PDF 目录中同名中文文件过多，请先整理输出文件。');
+    return PathUtils.join(PathUtils.parent(input),name+'.pdf');
   }
   async function registerPDF(attachment,path) {
     const key=attachment.libraryID+':'+(attachment.parentID||attachment.id)+':'+canonical(path);
@@ -125,7 +120,7 @@ var PaperPDFExport = (() => {
     const automatic=!destination;
     destination=destination||await defaultDestination(input);
     if(!PathUtils.isAbsolute(destination)||canonical(input)===canonical(destination))throw new Error('请使用新的中文 PDF 文件名，不能覆盖原文。');
-    if(await IOUtils.exists(destination))throw new Error('所选文件已存在，请换一个文件名，避免覆盖已有 PDF。');
+    if(!automatic&&await IOUtils.exists(destination))throw new Error('所选文件已存在，请换一个文件名，避免覆盖已有 PDF。');
     const data=PathUtils.join(Zotero.DataDirectory.dir,'paper-gpt','pdf-export');await IOUtils.makeDirectory(data,{ignoreExisting:true,createAncestors:true});
     const hash=await IOUtils.computeHexDigest(input,'sha256'),cache=PathUtils.join(data,'cache',hash);
     const id=Services.uuid.generateUUID().toString().replace(/[{}]/g,''),job=PathUtils.join(data,'jobs',id);
@@ -158,15 +153,13 @@ var PaperPDFExport = (() => {
           if(typeof result.output!=='string'||!canonical(result.output).startsWith(outputRoot)||!await IOUtils.exists(result.output))throw new Error('排版引擎返回的输出路径无效。');
           check();
           if(await IOUtils.computeHexDigest(input,'sha256')!==hash)throw new Error('导出期间原 PDF 文件已改变，请重新运行。');
-          if(automatic&&await IOUtils.exists(destination))destination=await defaultDestination(input);
-          // An atomic, no-overwrite copy publishes only a fully validated PDF.
-          await IOUtils.copy(result.output,destination,{noOverwrite:true});published=true;
           await waiting;await output;
-          let attachmentID,registrationError;
-          try{attachmentID=await registerPDF(attachment,destination);}
-          catch(e){registrationError=e.message;Zotero.logError(e);}
-          progress(attachmentID?'中文 PDF 已保存并添加到 Zotero · '+result.pages+' 页':'中文 PDF 已保存，添加附件失败：'+registrationError);
-          return {...result,path:destination,job,attachmentID,registrationError};
+          published=true;
+          const completed={...result,path:result.output,destination,automatic,sourceHash:hash,job};
+          try{await retryPublication(attachment,completed);}
+          catch(e){completed.registrationError=e.message;Zotero.logError(e);}
+          progress(completed.registrationError?'新版已生成，替换未完成；旧版已保留。':completed.cleanupWarning?'新版已保存；部分旧版本未能清理。':'中文 PDF 已更新到 Zotero · '+result.pages+' 页');
+          return completed;
         }
         if(finished){await output;throw new Error('本机排版引擎提前退出（'+exit+'）。'+(log?' '+log:''));}
         const queue=PathUtils.join(job,'queue');
@@ -210,5 +203,9 @@ var PaperPDFExport = (() => {
       }
     }
   }
-  return {configure(uri){rootURI=uri;},async stop(){await Promise.allSettled([...processes].map(async([p,job])=>{await writeJSON(PathUtils.join(job,'cancel.json'),{cancelled:true}).catch(()=>{});try{p.kill();}catch(_){}}));processes.clear();},diagnostics(){return {activeProcesses:processes.size};},run,registerPDF,translate,translatePage,pageBatches,pagePrompt,split,prompt,runtime,defaultDestination};
+  async function retryPublication(attachment,result){
+    const saved=await PaperPDFPublication.publish({attachment,output:result.output,destination:result.destination,automatic:result.automatic,sourceHash:result.sourceHash,register:registerPDF});
+    Object.assign(result,saved);delete result.registrationError;return result;
+  }
+  return {configure(uri){rootURI=uri;},async stop(){await Promise.allSettled([...processes].map(async([p,job])=>{await writeJSON(PathUtils.join(job,'cancel.json'),{cancelled:true}).catch(()=>{});try{p.kill();}catch(_){}}));processes.clear();},diagnostics(){return {activeProcesses:processes.size};},run,registerPDF,retryPublication,translate,translatePage,pageBatches,pagePrompt,split,prompt,runtime,defaultDestination};
 })();
