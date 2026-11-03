@@ -34,4 +34,17 @@ with tempfile.TemporaryDirectory(prefix='paper-gpt-page-bridge-') as directory:
     w.atomic_json(path3.with_name(r3['id']+'.reply.json'),{'id':r3['id'],'translations':[{'id':r3['items'][0]['id'],'translation':'遗漏占位符'}]})
     t.join(5);assert not t.is_alive() and 'placeholders changed' in errors[-1]
     assert not (bridge.cache/(bridge.key(invalid[0])+'.json')).exists()
+    # Reusing a complete literal partition is safe after geometry joins two
+    # previously separate paragraphs. Similar or reordered text is not reused.
+    first='The robot combines the visual and tactile observations <b1>.'
+    second='The combined model improves recognition in this experiment.'
+    w.atomic_json(bridge.cache/(bridge.key(first)+'.json'),{'source':first,'translation':'机器人融合视觉与触觉观测<b1>。'})
+    w.atomic_json(bridge.cache/(bridge.key(second)+'.json'),{'source':second,'translation':'融合模型提高了本实验中的识别表现。'})
+    if hasattr(bridge,'cache_parts'):del bridge.cache_parts
+    merged=first+' '+second
+    assert bridge.compose_cached(merged)=='机器人融合视觉与触觉观测<b1>。融合模型提高了本实验中的识别表现。'
+    assert bridge.compose_cached(second+' '+first+' Extra uncached material.') is None
+    before=len(list(bridge.queue.glob('*.request.json')))
+    assert bridge.translate_page([merged],3)==['机器人融合视觉与触觉观测<b1>。融合模型提高了本实验中的识别表现。']
+    assert len(list(bridge.queue.glob('*.request.json')))==before
 print('PASS page bridge deduplication, paragraph checkpoints, partial-page resume, old-cache reuse and formula validation')

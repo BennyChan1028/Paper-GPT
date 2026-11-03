@@ -7,6 +7,10 @@ for text in ['References','REFERENCES','VII. REFERENCES','8. Bibliography','Lite
     assert worker.is_references_heading(text),text
 for text in ['We compare references in this section.','Reference frames are aligned','Introduction']:
     assert not worker.is_references_heading(text),text
+for text in ['3.08 M 0.6838 0.7201','52.3 ms','F1@{0.1, 0.25, 0.5}','3e-4']:
+    assert worker.numeric_table_text(text),text
+for text in ['Average frame accuracy','Batch size 64','BiRP-HTN','F1 score','The score is 0.6']:
+    assert not worker.numeric_table_text(text),text
 with tempfile.TemporaryDirectory(prefix='paper-gpt-export-test-') as directory:
     root=Path(directory).resolve()
     assert root.is_relative_to(Path(tempfile.gettempdir()).resolve())

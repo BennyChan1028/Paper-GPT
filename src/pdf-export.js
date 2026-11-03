@@ -139,6 +139,7 @@ var PaperPDFExport = (() => {
       await IOUtils.makeDirectory(workspace,{ignoreExisting:false});
       workspaceCreated=true;
       await IOUtils.writeUTF8(worker,await Zotero.File.getResourceAsync(rootURI+'pdf-export-worker.py'));
+      await IOUtils.writeUTF8(PathUtils.join(job,'pdf_layout.py'),await Zotero.File.getResourceAsync(rootURI+'pdf_layout.py'));
       await writeJSON(PathUtils.join(job,'config.json'),{input,assets:env.assets,cache,workspace});
       check();
       progress('中文 PDF · 正在启动本机排版引擎…');

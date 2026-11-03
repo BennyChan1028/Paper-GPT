@@ -4,7 +4,7 @@ No translation API, browser cookies, account tokens or network listener are used
 BabelDOC is an independently installed AGPL-3.0 dependency; see THIRD_PARTY.md.
 """
 from pathlib import Path
-import argparse,contextlib,hashlib,json,logging,os,re,shutil,sys,tempfile,threading,time,uuid
+import argparse,contextlib,hashlib,importlib.util,json,logging,os,re,shutil,sys,tempfile,threading,time,uuid
 
 ENGINE_VERSION='0.6.4'
 def fs_path(path):
@@ -17,6 +17,12 @@ def is_references_heading(text):
     text=re.sub(r'\s+',' ',text or '').strip()
     text=re.sub(r'^(?:(?:\d+|[IVXLCDM]+)[.)、]?\s+)', '',text,flags=re.I).strip(' .:：')
     return bool(re.fullmatch(r'references(?: and notes)?|bibliography|literature cited|参考文献',text,re.I))
+
+def numeric_table_text(text):
+    text=re.sub(r'\s+','',text or '')
+    if not re.search(r'\d',text) or not re.fullmatch(r'[A-Za-z0-9.,%+\-−±/@{}\[\]():µ]+',text):return False
+    units={'M','G','K','B','k','ms','s','sec','Hz','MB','GB','KB','e','E','F','FPS'}
+    return all(word in units for word in re.findall(r'[A-Za-z]+',text))
 
 def atomic_json(path,value):
     path=fs_path(path);path.parent.mkdir(parents=True,exist_ok=True)
@@ -73,6 +79,35 @@ class FileBridge:
     def key(text):return hashlib.sha256(('paper-gpt-web-v1\0'+text).encode()).hexdigest()
     @staticmethod
     def tokens(text):return sorted(re.findall(r'</?b\d+>',text))
+    def compose_cached(self,text):
+        # A geometry fix can join two source paragraphs. Reuse only an exact,
+        # unambiguous ordered partition, with every original placeholder intact.
+        if not hasattr(self,'cache_parts'):
+            self.cache_parts=[]
+            for path in self.cache.glob('*.json'):
+                try:
+                    row=json.loads(path.read_text('utf8'))
+                    if not isinstance(row,dict):continue
+                    source=row['source'];value=row['translation']
+                    if isinstance(source,str) and len(source)>=32 and isinstance(value,str) and value.strip() and self.tokens(source)==self.tokens(value):self.cache_parts.append((source,value.strip()))
+                except (OSError,ValueError,KeyError):continue
+            self.cache_parts.sort(key=lambda pair:-len(pair[0]))
+        solutions=[]
+        def visit(rest,parts):
+            if len(solutions)>1 or len(parts)>16:return
+            if not rest.strip():
+                if len(parts)>1:solutions.append(parts)
+                return
+            rest=rest.lstrip()
+            for source,value in self.cache_parts:
+                if rest.startswith(source) and (len(rest)==len(source) or rest[len(source)].isspace()):visit(rest[len(source):],parts+[value])
+        visit(text,[])
+        if len(solutions)!=1:return None
+        value=''
+        for part in solutions[0]:
+            gap=' ' if value and re.search(r'[A-Za-z0-9]$',value) and re.match(r'[A-Za-z0-9]',part) else ''
+            value+=gap+part
+        return value if self.tokens(text)==self.tokens(value) else None
     def translate(self,text):return self.translate_page([text],None)[0] if text else text
     def translate_page(self,texts,page):
         with self.lock:
@@ -87,6 +122,10 @@ class FileBridge:
                     value=saved.get('translation')
                     if saved.get('source')==text and isinstance(value,str) and value.strip() and self.tokens(text)==self.tokens(value):
                         values[key]=value;self.reused+=1;continue
+                value=self.compose_cached(text)
+                if value:
+                    atomic_json(cached,{'source':text,'translation':value})
+                    values[key]=value;self.reused+=1;continue
                 missing[key]={'id':key[:24],'text':text}
             if not missing:return [values[self.key(text)] for text in texts]
             request_id=uuid.uuid4().hex;request=self.queue/(request_id+'.request.json');reply=self.queue/(request_id+'.reply.json')
@@ -157,18 +196,25 @@ def export_in_workspace(config,job,workspace,staged):
     import babeldoc.format.pdf.high_level as pipeline
     import pymupdf
     bridge=FileBridge(job,config['cache'])
+    spec=importlib.util.spec_from_file_location('paper_gpt_pdf_layout',Path(__file__).with_name('pdf_layout.py'))
+    layout=importlib.util.module_from_spec(spec);spec.loader.exec_module(layout)
+    layout_report=[];layout.install(pipeline,layout_report)
     original_layout_translator=pipeline.ILTranslator
     reference_state={'active':False,'pages':0}
     class BodyLayoutTranslator(original_layout_translator):
         def translate(self,docs):
             self.excluded=set()
             for page in docs.page:
+                tables=[layout.box for layout in page.page_layout if layout.class_name=='table' and layout.box]
                 for paragraph in page.pdf_paragraph:
                     title=re.sub(r'\s+',' ',paragraph.unicode or '').strip()
                     if is_references_heading(title):reference_state['active']=True
                     elif re.match(r'^(?:appendix|appendices|supplementary material)\b',title,re.I):reference_state['active']=False
                     if reference_state['active'] or paragraph.layout_label in {'abandon','figure','table','table_footnote','isolate_formula','formula_caption'}:
                         self.excluded.add(id(paragraph))
+                    if paragraph.box and numeric_table_text(title):
+                        cx=(paragraph.box.x+paragraph.box.x2)/2;cy=(paragraph.box.y+paragraph.box.y2)/2
+                        if any(box.x<=cx<=box.x2 and box.y<=cy<=box.y2 for box in tables):self.excluded.add(id(paragraph))
             return super().translate(docs)
         def process_page(self,page,executor,pbar=None,tracker=None):
             self.translation_config.raise_if_cancelled()
@@ -231,7 +277,8 @@ def export_in_workspace(config,job,workspace,staged):
     fs_path(published).parent.mkdir(parents=True,exist_ok=True)
     if fs_path(published).exists():raise RuntimeError('Output already exists; refusing to overwrite')
     shutil.copyfile(output,fs_path(published))
-    return {'status':'complete','output':str(published),'pages':pages,'translated':bridge.completed,'reused':bridge.reused,'webRequests':bridge.web_requests,'chineseCharacters':cjk,'engine':'BabelDOC '+ENGINE_VERSION}
+    atomic_json(job/'layout-fit.json',layout_report)
+    return {'status':'complete','output':str(published),'pages':pages,'translated':bridge.completed,'reused':bridge.reused,'webRequests':bridge.web_requests,'chineseCharacters':cjk,'engine':'BabelDOC '+ENGINE_VERSION,'fixedRegionFit':True}
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--probe',action='store_true');parser.add_argument('--job',type=Path)
@@ -249,8 +296,9 @@ def main():
     try:
         probe()
         with (job/'engine-console.log').open('w',encoding='utf8') as log,contextlib.redirect_stdout(log),contextlib.redirect_stderr(log):
+            import faulthandler
+            faulthandler.enable(file=log)
             if config.get('debugStackAfter'):
-                import faulthandler
                 faulthandler.dump_traceback_later(config['debugStackAfter'],file=log)
             result=export(config,job)
         atomic_json(job/'result.json',result);return 0
