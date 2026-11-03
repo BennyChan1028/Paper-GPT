@@ -6,6 +6,8 @@ const api=ctx.PaperPDFExport;
  const existing=new Set();ctx.PathUtils={filename:path.win32.basename,parent:path.win32.dirname,join:path.win32.join};ctx.IOUtils={exists:async p=>existing.has(p)};
  const original='D:\\Zotero\\storage\\ABCD1234\\Article.PDF';
  assert.equal(await api.defaultDestination(original),'D:\\Zotero\\storage\\ABCD1234\\中文-Article.pdf');
+ assert.equal(await api.defaultDestination(original,'dual'),'D:\\Zotero\\storage\\ABCD1234\\双语-Article.pdf');
+ assert.equal(await api.defaultDestination('D:\\Papers\\中文-Article.pdf','dual'),'D:\\Papers\\双语-Article.pdf');
  existing.add('D:\\Zotero\\storage\\ABCD1234\\中文-Article.pdf');assert.equal(await api.defaultDestination(original),'D:\\Zotero\\storage\\ABCD1234\\中文-Article.pdf');
  existing.add('D:\\Zotero\\storage\\ABCD1234\\中文-Article (2).pdf');assert.equal(await api.defaultDestination(original),'D:\\Zotero\\storage\\ABCD1234\\中文-Article.pdf');
  const chinese='D:\\Papers\\中文-研究.pdf';existing.add(chinese);assert.equal(await api.defaultDestination(chinese),chinese);

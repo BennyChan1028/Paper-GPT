@@ -85,9 +85,11 @@ var PaperPDFExport = (() => {
     if(!python||!PathUtils.isAbsolute(python)||!await IOUtils.exists(python))throw new Error('中文 PDF 排版组件尚未就绪。请先运行分享包中的“安装 PDF 导出组件”，然后重试。');
     return {python,assets:value.assets||PathUtils.join(Zotero.DataDirectory.dir,'paper-gpt','pdf-assets')};
   }
-  async function defaultDestination(input) {
+  async function defaultDestination(input,kind='mono') {
     let name=PathUtils.filename(input).replace(/\.pdf$/i,'')||'文献';
-    if(!name.startsWith('中文-'))name='中文-'+name;
+    const prefix=kind==='dual'?'双语-':'中文-';
+    if(kind==='dual')name=name.replace(/^中文-/,'');
+    if(!name.startsWith(prefix))name=prefix+name;
     // Leave room on filesystems with a 255-character filename limit.
     if(name.length>240)name=name.slice(0,240).replace(/[\uD800-\uDBFF]$/,'');
     return PathUtils.join(PathUtils.parent(input),name+'.pdf');
@@ -119,6 +121,7 @@ var PaperPDFExport = (() => {
     const env=await runtime();check();
     const automatic=!destination;
     destination=destination||await defaultDestination(input);
+    const dualDestination=await defaultDestination(automatic?input:destination,'dual');
     if(!PathUtils.isAbsolute(destination)||canonical(input)===canonical(destination))throw new Error('请使用新的中文 PDF 文件名，不能覆盖原文。');
     if(!automatic&&await IOUtils.exists(destination))throw new Error('所选文件已存在，请换一个文件名，避免覆盖已有 PDF。');
     const data=PathUtils.join(Zotero.DataDirectory.dir,'paper-gpt','pdf-export');await IOUtils.makeDirectory(data,{ignoreExisting:true,createAncestors:true});
@@ -135,6 +138,7 @@ var PaperPDFExport = (() => {
       workspaceCreated=true;
       await IOUtils.writeUTF8(worker,await Zotero.File.getResourceAsync(rootURI+'pdf-export-worker.py'));
       await IOUtils.writeUTF8(PathUtils.join(job,'pdf_layout.py'),await Zotero.File.getResourceAsync(rootURI+'pdf_layout.py'));
+      await IOUtils.writeUTF8(PathUtils.join(job,'pdf_spreads.py'),await Zotero.File.getResourceAsync(rootURI+'pdf_spreads.py'));
       await writeJSON(PathUtils.join(job,'config.json'),{input,assets:env.assets,cache,workspace});
       check();
       progress('中文 PDF · 正在启动本机排版引擎…');
@@ -150,15 +154,21 @@ var PaperPDFExport = (() => {
           const result=await readJSON(resultFile);
           if(result.status!=='complete')throw new Error('中文 PDF 生成失败：'+result.error);
           const outputRoot=canonical(PathUtils.join(job,'output'))+(Zotero.isWin?'\\':'/');
-          if(typeof result.output!=='string'||!canonical(result.output).startsWith(outputRoot)||!await IOUtils.exists(result.output))throw new Error('排版引擎返回的输出路径无效。');
+          for(const path of [result.output,result.dualOutput])if(typeof path!=='string'||!canonical(path).startsWith(outputRoot)||!await IOUtils.exists(path))throw new Error('排版引擎返回的输出路径无效。');
+          if(canonical(result.output)===canonical(result.dualOutput))throw new Error('排版引擎的中文与双语输出路径重复。');
           check();
           if(await IOUtils.computeHexDigest(input,'sha256')!==hash)throw new Error('导出期间原 PDF 文件已改变，请重新运行。');
           await waiting;await output;
           published=true;
-          const completed={...result,path:result.output,destination,automatic,sourceHash:hash,job};
-          try{await retryPublication(attachment,completed);}
-          catch(e){completed.registrationError=e.message;Zotero.logError(e);}
-          progress(completed.registrationError?'新版已生成，替换未完成；旧版已保留。':completed.cleanupWarning?'新版已保存；部分旧版本未能清理。':'中文 PDF 已更新到 Zotero · '+result.pages+' 页');
+          const completed={...result,kind:'mono',path:result.output,destination,automatic,sourceHash:hash,job};
+          completed.dual={kind:'dual',output:result.dualOutput,path:result.dualOutput,destination:dualDestination,automatic,sourceHash:hash,pages:result.pages};
+          // Publish independently so a locked file in one format cannot
+          // destroy the other. Each failed format can be retried on its own.
+          for(const part of [completed,completed.dual]){
+            try{await retryPublication(attachment,part);}
+            catch(e){part.registrationError=e.message;Zotero.logError(e);}
+          }
+          progress([completed,completed.dual].some(p=>p.registrationError)?'PDF 已生成，部分保存未完成；对应旧版已保留。':[completed,completed.dual].some(p=>p.cleanupWarning)?'中文与双语 PDF 已保存；部分旧版本未能清理。':'中文与双语 PDF 已更新到 Zotero · '+result.pages+' 页');
           return completed;
         }
         if(finished){await output;throw new Error('本机排版引擎提前退出（'+exit+'）。'+(log?' '+log:''));}
@@ -204,7 +214,7 @@ var PaperPDFExport = (() => {
     }
   }
   async function retryPublication(attachment,result){
-    const saved=await PaperPDFPublication.publish({attachment,output:result.output,destination:result.destination,automatic:result.automatic,sourceHash:result.sourceHash,register:registerPDF});
+    const saved=await PaperPDFPublication.publish({attachment,output:result.output,destination:result.destination,automatic:result.automatic,sourceHash:result.sourceHash,register:registerPDF,kind:result.kind||'mono'});
     Object.assign(result,saved);delete result.registrationError;return result;
   }
   return {configure(uri){rootURI=uri;},async stop(){await Promise.allSettled([...processes].map(async([p,job])=>{await writeJSON(PathUtils.join(job,'cancel.json'),{cancelled:true}).catch(()=>{});try{p.kill();}catch(_){}}));processes.clear();},diagnostics(){return {activeProcesses:processes.size};},run,registerPDF,retryPublication,translate,translatePage,pageBatches,pagePrompt,split,prompt,runtime,defaultDestination};

@@ -5,7 +5,9 @@ var PaperPDFPublication=(()=>{
   const digest=p=>IOUtils.computeHexDigest(p,'sha256');
   const read=async p=>JSON.parse(await IOUtils.readUTF8(p));
   const write=(p,value)=>IOUtils.writeUTF8(p,JSON.stringify(value),{tmpPath:p+'.tmp'});
-  const sourceKey=a=>a.libraryID+'-'+String(a.key||a.id).replace(/[^A-Za-z0-9_-]/g,'');
+  // Separate provenance for the two formats: replacing Chinese must never
+  // erase the current bilingual attachment, including when it was renamed.
+  const sourceKey=(a,kind='mono')=>a.libraryID+'-'+String(a.key||a.id).replace(/[^A-Za-z0-9_-]/g,'')+(kind==='dual'?'-dual':'');
   function family(name,base){
     name=String(name||'').replace(/\.pdf$/i,'');base=String(base).replace(/\.pdf$/i,'');
     if(Zotero.isWin){name=name.toLowerCase();base=base.toLowerCase();}
@@ -14,13 +16,13 @@ var PaperPDFPublication=(()=>{
     // Legacy automatic suffixes; do not mistake publication years for copies.
     return /^(?: \((?:[2-9]|[1-9]\d)\)|-(?:[2-9]|[1-9]\d))$/.test(tail);
   }
-  async function plan(attachment,input,destination,automatic){
+  async function plan(attachment,input,destination,automatic,kind){
     const root=PathUtils.join(Zotero.DataDirectory.dir,'paper-gpt','pdf-export','exports');
     await IOUtils.makeDirectory(root,{ignoreExisting:true,createAncestors:true});
-    const registry=PathUtils.join(root,sourceKey(attachment)+'.json');let prior=[];
+    const registry=PathUtils.join(root,sourceKey(attachment,kind)+'.json');let prior=[];
     if(await IOUtils.exists(registry)){
       const saved=await read(registry);
-      if(saved.source!==sourceKey(attachment)||!Array.isArray(saved.records))throw Error('中文 PDF 保存记录无效，旧版本已保留。');
+      if(saved.source!==sourceKey(attachment,kind)||!Array.isArray(saved.records))throw Error('PDF 保存记录无效，旧版本已保留。');
       prior=saved.records;
     }
     const base=PathUtils.filename(destination),sourceFolder=canonical(PathUtils.parent(input)),files=new Map(),items=[];
@@ -52,8 +54,9 @@ var PaperPDFPublication=(()=>{
     }
     return {registry,prior,files:[...files.values()],items};
   }
-  async function publish({attachment,output,destination,automatic,sourceHash,register}){
-    const key=sourceKey(attachment);if(active.has(key))throw Error('这篇论文已有中文 PDF 正在保存，请稍后重试。');
+  async function publish({attachment,output,destination,automatic,sourceHash,register,kind='mono'}){
+    if(!['mono','dual'].includes(kind))throw Error('未知的 PDF 输出类型。');
+    const key=sourceKey(attachment,kind);if(active.has(key))throw Error('这篇论文已有 PDF 正在保存，请稍后重试。');
     active.add(key);
     let staged,backup,publishedHash,stagedCreated=false,movedOld=false,movedNew=false,newID,committed=false;
     try{
@@ -61,7 +64,7 @@ var PaperPDFPublication=(()=>{
       if(!input||canonical(input)===canonical(destination))throw Error('不能覆盖原文。');
       if(await digest(input)!==sourceHash)throw Error('原 PDF 已改变，旧中文版本已保留，请重新导出。');
       if(!automatic&&await IOUtils.exists(destination))throw Error('所选文件已存在，请换一个文件名。');
-      const old=await plan(attachment,input,destination,automatic),newHash=await digest(output);
+      const old=await plan(attachment,input,destination,automatic,kind),newHash=await digest(output);
       publishedHash=newHash;
       const oldHash=await IOUtils.exists(destination)?await digest(destination):null;
       const id=Services.uuid.generateUUID().toString().replace(/[{}]/g,'');

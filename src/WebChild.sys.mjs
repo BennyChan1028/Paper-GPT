@@ -1,4 +1,4 @@
-const PAPER_WEB_ACTOR_BUILD='20261103-replace-r24';
+const PAPER_WEB_ACTOR_BUILD='20261103-dual-r25';
 export class PaperWebChild extends JSWindowActorChild {
   didDestroy(){
     this.cancelled=true;this.disposed=true;

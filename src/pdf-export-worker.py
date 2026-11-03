@@ -273,12 +273,20 @@ def export_in_workspace(config,job,workspace,staged):
         cjk=sum(len(re.findall(r'[\u3400-\u9fff]',page.get_text())) for page in target)
         if cjk<5 or bridge.completed+bridge.reused==0:raise RuntimeError('No usable Chinese translation found')
         pages=target.page_count
+    # The same completed translation supplies both outputs, with no second
+    # translation pass. Keep the original on the left and Chinese on the right.
+    spec=importlib.util.spec_from_file_location('paper_gpt_pdf_spreads',Path(__file__).with_name('pdf_spreads.py'))
+    spreads=importlib.util.module_from_spec(spec);spec.loader.exec_module(spreads)
+    bilingual=workspace/'bilingual.pdf'
+    spreads.side_by_side(staged,output,bilingual)
     published=job/'output'/'translated.pdf'
+    published_dual=job/'output'/'bilingual.pdf'
     fs_path(published).parent.mkdir(parents=True,exist_ok=True)
-    if fs_path(published).exists():raise RuntimeError('Output already exists; refusing to overwrite')
+    if fs_path(published).exists() or fs_path(published_dual).exists():raise RuntimeError('Output already exists; refusing to overwrite')
     shutil.copyfile(output,fs_path(published))
+    shutil.copyfile(bilingual,fs_path(published_dual))
     atomic_json(job/'layout-fit.json',layout_report)
-    return {'status':'complete','output':str(published),'pages':pages,'translated':bridge.completed,'reused':bridge.reused,'webRequests':bridge.web_requests,'chineseCharacters':cjk,'engine':'BabelDOC '+ENGINE_VERSION,'fixedRegionFit':True}
+    return {'status':'complete','output':str(published),'dualOutput':str(published_dual),'pages':pages,'translated':bridge.completed,'reused':bridge.reused,'webRequests':bridge.web_requests,'chineseCharacters':cjk,'engine':'BabelDOC '+ENGINE_VERSION,'fixedRegionFit':True}
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--probe',action='store_true');parser.add_argument('--job',type=Path)

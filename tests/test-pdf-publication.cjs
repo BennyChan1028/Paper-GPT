@@ -64,6 +64,23 @@ async function main(){
  await test('explicit destination does not overwrite existing files or delete old exports',async()=>{const f=fixture(),old=f.pdf('中文-Article','/storage/OLD/file.pdf','OLD');f.put(f.dest,'OLD');await assert.rejects(f.publish({automatic:false}),/已存在/);assert.equal(f.bytes(f.dest),'OLD');assert.ok(f.items.has(old.id));});
  await test('parallel publication of one source is rejected',async()=>{const f=fixture();let release,entered;const reached=new Promise(r=>entered=r),hold=new Promise(r=>release=r);const first=f.publish({register:async(...args)=>{entered();await hold;return f.register(...args);}});await reached;await assert.rejects(f.publish(),/正在保存/);release();await first;assert.equal(f.children().length,1);});
  await test('legacy suffix detection is narrow and preserves year/other title',async()=>{const f=fixture();for(const s of ['中文-Article','中文-Article.pdf','中文-Article (2)','中文-Article-2','中文-Article (99)'])assert.ok(f.api.family(s,'中文-Article.pdf'));for(const s of ['中文-Article (2020)','中文-Article-other','中文-Another','Article'])assert.ok(!f.api.family(s,'中文-Article.pdf'));});
+ await test('Chinese and bilingual formats keep independent provenance and replace only themselves',async()=>{
+  const f=fixture(),dualPath='/storage/ORIGINAL/双语-Article.pdf';
+  const mono=await f.publish(),dual=await f.publish({kind:'dual',destination:dualPath});
+  f.items.get(dual.attachmentID).getField=()=> 'Renamed bilingual attachment';
+  const mono2=await f.publish();assert.ok(!f.items.has(mono.attachmentID)&&f.items.has(dual.attachmentID));
+  const dual2=await f.publish({kind:'dual',destination:dualPath});assert.ok(!f.items.has(dual.attachmentID)&&f.items.has(mono2.attachmentID)&&f.items.has(dual2.attachmentID));assert.equal(f.children().length,2);f.cleanTemps();
+ });
+ await test('failed bilingual replacement retains old bilingual file and current Chinese attachment',async()=>{
+  const f=fixture(),dualPath='/storage/ORIGINAL/双语-Article.pdf',mono=await f.publish(),dual=await f.publish({kind:'dual',destination:dualPath});
+  f.put(f.output,'NEW DUAL');f.faults.register=()=>{throw Error('dual import denied');};
+  await assert.rejects(f.publish({kind:'dual',destination:dualPath}),/dual import denied/);
+  assert.equal(f.bytes(dualPath),'NEW');assert.equal(f.bytes(f.dest),'NEW');assert.ok(f.items.has(dual.attachmentID)&&f.items.has(mono.attachmentID));assert.equal(f.children().length,2);f.cleanTemps();
+ });
+ await test('legacy bilingual numbered copies are removed without touching Chinese counterpart',async()=>{
+  const f=fixture(),mono=await f.publish(),old=f.pdf('双语-Article (2)','/storage/OLD/file.pdf','OLD');f.put('/storage/ORIGINAL/双语-Article (2).pdf','OLD');
+  await f.publish({kind:'dual',destination:'/storage/ORIGINAL/双语-Article.pdf'});assert.ok(!f.items.has(old.id)&&f.items.has(mono.attachmentID));assert.ok(!f.files.has('/storage/ORIGINAL/双语-Article (2).pdf'));assert.equal(f.children().length,2);
+ });
  console.log('PASS '+count+' PDF publication and rollback scenarios');
 }
 main().catch(e=>{console.error(e);process.exitCode=1});

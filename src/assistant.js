@@ -1,7 +1,7 @@
 /* Independent implementation. No GPT PRO code or runtime bridge is used. */
 var PaperWebAssistant = (() => {
   const ID='paper-web-assistant@local.customization', PREF='extensions.paperWebAssistant.', HTML='http://www.w3.org/1999/xhtml';
-  const WEB_BUILD='20261103-replace-r24';
+  const WEB_BUILD='20261103-dual-r25';
   const panels=new Map(), injected=new Set(), readers=new Map(), workspaces=new Map();
   let chromeHandle, paneID, timer, commands=[], defaults=[], running=false, activeRun=null, uiCSS='', sessionSerial=0;
   const get=(k,d)=>{try{return Zotero.Prefs.get(PREF+k,true)??d;}catch(_){return d;}};
@@ -324,15 +324,22 @@ var PaperWebAssistant = (() => {
         const check=()=>{if(activeRun?.cancelled)throw new Error('任务已停止。');if(!currentReader._internalReader||s.sessionKey!==PaperSessions.key(target))throw new Error('PDF 已关闭或文献已切换，中文 PDF 导出已停止。');};
         const result=await PaperPDFExport.run({attachment:target,win:s.win,budget:async()=>{await ensureSession(s);return inputBudget(s);},check,ask:text=>ask(s,text),progress:label=>{s.translationBatchLabel=label;status(s,label);}});
         if(result.cancelled){status(s,'已取消另存中文 PDF。');return;}
-        s.lastPDFExport=result;const heading=el(s.doc,'strong',result.attachmentID?'中文 PDF 已添加到 Zotero':'中文 PDF 已保存');
-        s.result.replaceChildren(heading,el(s.doc,'p',result.path));
-        const open=el(s.doc,'button','打开中文 PDF');open.type='button';open.onclick=()=>result.attachmentID?Zotero.Reader.open(result.attachmentID):Zotero.launchFile(result.path);s.result.append(open);s.result.hidden=false;
-        if(result.registrationError||result.cleanupWarning){
-          const warning=el(s.doc,'p',result.registrationError?'新版已生成，替换失败，旧版已保留：'+result.registrationError:result.cleanupWarning),retry=el(s.doc,'button',result.registrationError?'重新保存并添加':'清理旧版本');retry.type='button';
-          retry.onclick=async()=>{retry.disabled=true;try{await PaperPDFExport.retryPublication(target,result);heading.textContent='中文 PDF 已更新到 Zotero';s.result.querySelector('p').textContent=result.path;if(result.cleanupWarning){warning.textContent=result.cleanupWarning;retry.textContent='清理旧版本';}else{warning.remove();retry.remove();}status(s,result.cleanupWarning?'新版已保存，部分旧版本未清理。':'中文 PDF 已更新，旧版本已清理，无需重新翻译。');}catch(e){warning.textContent='替换未完成，旧版已保留：'+e.message;}finally{retry.disabled=false;}};
-          s.result.append(warning,retry);
+        s.lastPDFExport=result;s.result.replaceChildren();s.result.hidden=false;
+        const parts=[result,result.dual].filter(Boolean);
+        const updateStatus=()=>status(s,parts.some(p=>p.registrationError)?'PDF 已生成，部分保存未完成；可在对应文件下重试。':parts.some(p=>p.cleanupWarning)?'中文与双语 PDF 已保存，部分旧版本未清理。':'中文与双语 PDF 已更新到 Zotero，各 '+result.pages+' 页。');
+        for(const part of parts){
+          const label=part.kind==='dual'?'双语 PDF（左英文 · 右中文）':'中文 PDF',row=el(s.doc,'section');
+          const heading=el(s.doc,'strong',label+(part.attachmentID?' · 已添加到 Zotero':' · 已生成')),path=el(s.doc,'p',part.path);
+          const open=el(s.doc,'button',part.kind==='dual'?'打开双语 PDF':'打开中文 PDF');open.type='button';
+          open.onclick=()=>part.attachmentID?Zotero.Reader.open(part.attachmentID):Zotero.launchFile(part.path);row.append(heading,path,open);
+          if(part.registrationError||part.cleanupWarning){
+            const warning=el(s.doc,'p',part.registrationError?'新版已生成，替换失败，旧版已保留：'+part.registrationError:part.cleanupWarning),retry=el(s.doc,'button',part.registrationError?'重新保存并添加':'清理旧版本');retry.type='button';
+            retry.onclick=async()=>{retry.disabled=true;try{await PaperPDFExport.retryPublication(target,part);heading.textContent=label+' · 已添加到 Zotero';path.textContent=part.path;if(part.cleanupWarning){warning.textContent=part.cleanupWarning;retry.textContent='清理旧版本';}else{warning.remove();retry.remove();}updateStatus();}catch(e){warning.textContent='保存或清理未完成：'+e.message;}finally{retry.disabled=false;}};
+            row.append(warning,retry);
+          }
+          s.result.append(row);
         }
-        status(s,result.registrationError?'新版已生成，旧版保留，可点击“重新保存并添加”。':result.cleanupWarning?'新版已保存，部分旧版本未清理。':'中文 PDF 已更新到 Zotero，共 '+result.pages+' 页'+(result.replaced?'，已清理旧中文版本':'')+'。');return result;
+        updateStatus();return result;
       }
       if(['fullTranslation','pageTranslation'].includes(translationScope)){if(options.draft)throw new Error('逐段翻译并写入标注需点击发送。');return await translateFull(s,currentReader,{pageOnly:translationScope==='pageTranslation'});}
       await ensureSession(s);
@@ -1308,6 +1315,6 @@ var PaperWebAssistant = (() => {
     show,run,selection,context,writeAnnotation,saveNote,locate,tool,
     get commands(){return commands;},
     get panels(){return [...panels.values()];},
-    diagnostics(){return {version:'1.6.17',webBuild:WEB_BUILD,compatibility:PaperZoteroCompat.diagnostics(),paneID,commands:commands.length,panels:[...panels.values()].map(s=>({visible:panelVisible(s),deferred:!!s.deferredURL,background:!!s.backgroundCheck,navigationCount:s.navigationCount||0,status:s.status.textContent,url:s.browser.currentURI?.spec})),busy:!!activeRun};}
+    diagnostics(){return {version:'1.6.18',webBuild:WEB_BUILD,compatibility:PaperZoteroCompat.diagnostics(),paneID,commands:commands.length,panels:[...panels.values()].map(s=>({visible:panelVisible(s),deferred:!!s.deferredURL,background:!!s.backgroundCheck,navigationCount:s.navigationCount||0,status:s.status.textContent,url:s.browser.currentURI?.spec})),busy:!!activeRun};}
   };
 })();
