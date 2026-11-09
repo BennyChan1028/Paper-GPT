@@ -1,7 +1,7 @@
 const fs=require('fs'),vm=require('vm'),assert=require('node:assert/strict');
 let stored=[],model,requests=[],next,hold=false,delayMs=0;
 const prefs=new Map();
-const win={AbortController,setInterval,clearInterval,clearTimeout,setTimeout:(fn,ms)=>setTimeout(fn,delayMs||ms),fetch:async(url,options)=>{requests.push({url,options});if(hold)return new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(Error('cancelled'))));return next||{ok:true,json:async()=>({choices:[{finish_reason:'stop',message:{content:'{"translations":[{"id":"p","translation":"中文译文"}]}'}}]})};}};
+const win={AbortController,setInterval,clearInterval,clearTimeout,setTimeout:(fn,ms)=>setTimeout(fn,delayMs||ms),fetch:async(url,options)=>{requests.push({url,options});if(hold)return new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(Error('cancelled'))));if(typeof next==='function')return next(url,options);return next||{ok:true,json:async()=>({choices:[{finish_reason:'stop',message:{content:'{"translations":[{"id":"p","translation":"中文译文"}]}'}}]})};}};
 const ctx={Services:{logins:{findLogins:()=>stored,addLoginAsync:async l=>stored.push(l),modifyLogin:async(a,b)=>stored.splice(stored.indexOf(a),1,b),removeLogin:async l=>stored.splice(stored.indexOf(l),1)}},Components:{classes:{'@mozilla.org/login-manager/loginInfo;1':{createInstance:()=>({init:(origin,url,realm,username,password)=>{Object.assign(login,{origin,realm,username,password});}})}},interfaces:{nsILoginInfo:{}}},Zotero:{Prefs:{get:k=>prefs.get(k),set:(k,v)=>prefs.set(k,v)},getMainWindow:()=>win}};
 let login;
 ctx.Components.classes['@mozilla.org/login-manager/loginInfo;1'].createInstance=()=>{login={init(origin,url,realm,username,password){Object.assign(this,{origin,realm,username,password});}};return login;};
@@ -23,7 +23,21 @@ async function main(){
  next=undefined;hold=true;const pending=client.ask('JSON');setTimeout(()=>api.cancel(),10);await assert.rejects(pending,/已停止/);hold=false;
  hold=true;delayMs=10;await assert.rejects(client.ask('JSON'),/超时/);hold=false;delayMs=0;
  let cancelled=false;const guarded=await api.client({check:()=>{if(cancelled)throw Error('closed PDF')}});hold=true;const closed=guarded.ask('JSON');setTimeout(()=>cancelled=true,10);await assert.rejects(closed,/closed PDF/);hold=false;
+ const reply=rows=>({ok:true,json:async()=>({choices:[{finish_reason:'stop',message:{content:JSON.stringify({translations:rows})}}]})});
+ const prompt=rows=>'逐段翻译，只返回 JSON。\n'+JSON.stringify(rows);
+ const rows=[{id:'0b4b408f773c124a5a334e17-0',text:'First paragraph <b1>formula</b1>.'},{id:'ed46d187bcac77314b18e9d6-0',text:'Second paragraph.'}];
+ next=async(u,o)=>{const sent=JSON.parse(JSON.parse(o.body).messages[1].content.split('\n').at(-1));assert.deepEqual(sent.map(r=>r.id),['p1','p2']);return reply([{id:'p2',translation:'第二段'},{id:'p1',translation:'第一段 <b1>公式</b1>。'}]);};
+ const mapped=JSON.parse(await client.ask(prompt(rows))).translations;assert.deepEqual(mapped.map(r=>r.id),rows.map(r=>r.id));assert.match(mapped[0].translation,/第一段/);assert.match(mapped[1].translation,/第二段/);
+ let repairCalls=0;next=async(u,o)=>{repairCalls++;const sent=JSON.parse(JSON.parse(o.body).messages[1].content.split('\n').at(-1));if(repairCalls===1)return reply([{id:'p1',translation:''},{id:'p2',translation:'已完成第二段'}]);assert.deepEqual(sent.map(r=>r.id),['p1']);return reply([{id:'p1',translation:'补全第一段 <b1>公式</b1>。'}]);};
+ const recovered=JSON.parse(await client.ask(prompt(rows))).translations;assert.equal(repairCalls,2);assert.equal(recovered[1].translation,'已完成第二段');assert.match(recovered[0].translation,/补全/);
+ repairCalls=0;next=async()=>{repairCalls++;return repairCalls===1?reply([{id:'p1',translation:'改变了公式'},{id:'p2',translation:'第二段'}]):reply([{id:'p1',translation:'保留 <b1>公式</b1>'}]);};await client.ask(prompt(rows));assert.equal(repairCalls,2,'placeholder mismatch is repaired only for invalid rows');
+ repairCalls=0;next=async()=>{repairCalls++;return reply([{id:'wrong',translation:'不可按返回顺序匹配'},{id:'p2',translation:'第二段'}]);};await assert.rejects(client.ask(prompt(rows)),/1 段.*已补取一次/);assert.equal(repairCalls,2);
+ repairCalls=0;next=async()=>{repairCalls++;return repairCalls===1?reply([{id:'p1',translation:'第一段 <b1>x</b1>'},{id:'p1',translation:'冲突 <b1>x</b1>'},{id:'p2',translation:'第二段'}]):reply([{id:'p1',translation:'已确认 <b1>x</b1>'}]);};await client.ask(prompt(rows));assert.equal(repairCalls,2,'duplicate IDs never select an arbitrary translation');
+ const large=[{id:rows[0].id,text:'English text. '.repeat(560)}];next=async(u,o)=>{const p=JSON.parse(o.body).messages[1].content;assert.ok(p.length<=8000);return reply([{id:'p1',translation:'完整长段落译文'}]);};assert.equal(JSON.parse(await client.ask(prompt(large))).translations[0].id,large[0].id);
+ const beforeFormula=requests.length;next=async()=>{throw Error('formula must not request API')};const formula=JSON.parse(await client.ask(prompt([{id:'formula-id',text:'<b12> (1) </b12>'}])));assert.equal(formula.translations[0].translation,'<b12> (1) </b12>');assert.equal(requests.length,beforeFormula);
+ next={ok:false,status:401};const beforeError=requests.length;await assert.rejects(client.ask(prompt(rows)),/401/);assert.equal(requests.length,beforeError+1,'HTTP errors never auto retry');
+ next={ok:true,json:async()=>({choices:[{finish_reason:'length',message:{content:'{}'}}]})};const beforeLength=requests.length;await assert.rejects(client.ask(prompt(rows)),/输出长度限制/);assert.equal(requests.length,beforeLength+1,'truncated replies never auto retry');
  await api.clear();assert.equal(stored.length,0);assert.equal((await api.settings()).configured,false);
- console.log('PASS login-manager key save/update/clear, no pref secret, official endpoint/auth, model/JSON/non-thinking, input bounds, safe HTTP errors, truncation/empty/invalid replies, cancel/timeout/closed PDF and no automatic retries');
+ console.log('PASS login-manager key save/update/clear, no pref secret, official endpoint/auth, model/JSON/non-thinking, input bounds, safe HTTP errors, truncation/empty/invalid replies, cancel/timeout/closed PDF short IDs restored after reordered replies, one targeted repair for empty/duplicate/invalid rows, formula-only preservation and no uncertain retries');
 }
 main().catch(e=>{console.error(e);process.exitCode=1});

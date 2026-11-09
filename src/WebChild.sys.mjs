@@ -1,4 +1,4 @@
-const PAPER_WEB_ACTOR_BUILD='20261109-deepseek-r26';
+const PAPER_WEB_ACTOR_BUILD='20261109-api-ids-r27';
 export class PaperWebChild extends JSWindowActorChild {
   didDestroy(){
     this.cancelled=true;this.disposed=true;

@@ -3,6 +3,24 @@ var PaperTranslationAPI=(()=>{
   const endpoint='https://api.deepseek.com/chat/completions';
   const origin='chrome://paper-gpt',realm='DeepSeek translation API',pref='extensions.paperWebAssistant.translationModel';
   const models=['deepseek-flash','deepseek-v4-pro'],budget=8000,requests=new Set();
+  const tokens=text=>(text.match(/<\/?b\d+>/g)||[]).sort().join('|');
+  function material(text){
+    const cut=text.lastIndexOf('\n');if(cut<0)return null;
+    let rows;try{rows=JSON.parse(text.slice(cut+1));}catch(_){return null;}
+    if(!Array.isArray(rows)||!rows.length||rows.some(r=>!r||typeof r.id!=='string'||typeof r.text!=='string')||new Set(rows.map(r=>r.id)).size!==rows.length)return null;
+    return {instruction:text.slice(0,cut),rows:rows.map((row,index)=>({...row,shortID:'p'+(index+1)}))};
+  }
+  function collect(data,rows){
+    const expected=new Map(rows.map(r=>[r.shortID,r])),values=new Map(),seen=new Set(),invalid=new Set();
+    for(const row of Array.isArray(data?.translations)?data.translations:[]){
+      if(!row||!expected.has(row.id))continue;
+      if(seen.has(row.id)){values.delete(row.id);invalid.add(row.id);continue;}seen.add(row.id);
+      const source=expected.get(row.id).text;
+      if(typeof row.translation!=='string'||!row.translation.trim()||row.translation.length>30000||tokens(source)!==tokens(row.translation))continue;
+      if(!invalid.has(row.id))values.set(row.id,row.translation.trim());
+    }
+    return values;
+  }
   async function logins(){return await Services.logins.findLogins(origin,null,realm);}
   const model=()=>{const value=Zotero.Prefs.get(pref,true);return models.includes(value)?value:models[0];};
   async function settings(){return {configured:(await logins()).some(l=>l.username==='api-key'&&l.password),model:model()};}
@@ -29,7 +47,7 @@ var PaperTranslationAPI=(()=>{
     const key=(await logins()).find(l=>l.username==='api-key')?.password,value=model();
     if(!key)throw Error('请在“设置 → DeepSeek 翻译 API”保存 API Key；全文翻译不会发送到 ChatGPT 网页。');
     check();
-    return {budget,identity:'deepseek-'+value,model:value,async ask(text){
+    async function request(text){
       check();if(typeof text!=='string'||!text.trim()||text.length>budget)throw Error('本批翻译超过 API 输入预算，请分批后重试。');
       const controller=new win.AbortController();requests.add(controller);let timedOut=false;
       const timeout=win.setTimeout(()=>{timedOut=true;controller.abort();},180000);
@@ -56,6 +74,28 @@ var PaperTranslationAPI=(()=>{
         if(String(e.message).startsWith('DeepSeek'))throw e;
         throw Error('DeepSeek API 连接失败，本批未写入。请检查网络；重试可能再次计费。');
       }finally{win.clearTimeout(timeout);win.clearInterval(poll);requests.delete(controller);}
+    }
+    return {budget,identity:'deepseek-'+value,model:value,async ask(text){
+      check();const batch=material(text);if(!batch)return request(text);
+      const values=new Map();
+      // Formula-only/numeric fragments carry no language to translate. Keep
+      // them verbatim instead of asking the model to invent an empty translation.
+      for(const row of batch.rows)if(!row.text.replace(/<\/?b\d+>/g,'').replace(/[\p{N}\p{P}\p{S}\s]/gu,''))values.set(row.shortID,row.text);
+      for(let attempt=0;attempt<2;attempt++){
+        check();const pending=batch.rows.filter(r=>!values.has(r.shortID));if(!pending.length)break;
+        if(attempt)progress('DeepSeek API · 正在补全 '+pending.length+' 段未通过校验的译文…');
+        const payload=JSON.stringify(pending.map(r=>({id:r.shortID,text:r.text})));
+        let prompt=batch.instruction+' 段落 id 是本次短编号，必须原样返回。每个 id 恰好一项，translation 必须非空；即使原文不需翻译，也原样返回文字。只输出 translations JSON。\n'+payload;
+        if(prompt.length>budget)prompt=batch.instruction+'\n'+payload;
+        // Retry only a successfully received reply with bad row correspondence.
+        // HTTP errors, timeout, cancellation and unknown outcomes propagate.
+        const answer=await request(prompt),accepted=collect(JSON.parse(answer),pending);
+        for(const [id,translation]of accepted)values.set(id,translation);
+      }
+      const missing=batch.rows.filter(r=>!values.has(r.shortID));
+      if(missing.length)throw Error('DeepSeek 返回 '+missing.length+' 段编号、空译文或公式占位符不合格，已补取一次；本批未写入，已完成的前页可继续复用。');
+      // Restore only verified one-to-one IDs. Never pair by array position.
+      return JSON.stringify({translations:batch.rows.map(r=>({id:r.id,translation:values.get(r.shortID)}))});
     }};
   }
   async function test(options){const api=await client(options);const content=await api.ask('仅返回 JSON 对象 {"ok":true}，用于检查 API 连接。');if(JSON.parse(content).ok!==true)throw Error('DeepSeek 连接成功，但返回内容不符合预期。');return api.model;}
