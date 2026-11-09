@@ -11,6 +11,7 @@ async function startup({rootURI}) {
   Services.scriptloader.loadSubScriptWithOptions(rootURI+'library-ui.js',{target:paperScope,charset:'UTF-8',ignoreCache:true});
   Services.scriptloader.loadSubScriptWithOptions(rootURI+'long-text.js',{target:paperScope,charset:'UTF-8',ignoreCache:true});
   Services.scriptloader.loadSubScriptWithOptions(rootURI+'paragraphs.js',{target:paperScope,charset:'UTF-8',ignoreCache:true});
+  Services.scriptloader.loadSubScriptWithOptions(rootURI+'translation-api.js',{target:paperScope,charset:'UTF-8',ignoreCache:true});
   Services.scriptloader.loadSubScriptWithOptions(rootURI+'pdf-publication.js',{target:paperScope,charset:'UTF-8',ignoreCache:true});
   Services.scriptloader.loadSubScriptWithOptions(rootURI+'pdf-export.js',{target:paperScope,charset:'UTF-8',ignoreCache:true});
   Services.scriptloader.loadSubScriptWithOptions(rootURI+'assistant.js',{target:paperScope,charset:'UTF-8',ignoreCache:true});
@@ -20,6 +21,7 @@ async function startup({rootURI}) {
   Zotero.__PaperWebAssistant=paperScope.PaperWebAssistant;
 }
 async function shutdown() {
+  paperScope?.PaperTranslationAPI?.cancel();
   await paperScope?.PaperPDFExport?.stop();
   paperScope?.AnnotationPopupControls?.stop();
   paperScope?.PaperWebAssistant?.stop();

@@ -1,4 +1,4 @@
-/* Local PDF typesetting adapter. No remote translation service or API key. */
+/* Local PDF typesetting adapter; the caller supplies the translation API. */
 var PaperPDFExport = (() => {
   let rootURI = '';
   const processes=new Map();
@@ -41,13 +41,13 @@ var PaperPDFExport = (() => {
       let parts=[item.text];
       if(pagePrompt([{id:item.id+'-0',text:item.text}],request.page).length>limit){
         let size=Math.floor((limit-pagePrompt([{id:item.id+'-0',text:''}],request.page).length)/2);
-        if(size<1)throw new Error('网页输入框可用长度不足，尚未发送。');
+        if(size<1)throw new Error('翻译批次可用长度不足，尚未发送。');
         parts=split(item.text,size);
       }
       parents.set(item.id,{item,count:parts.length,parts:[]});
       for(const [index,text] of parts.entries()){
         const piece={id:item.id+'-'+index,text,parent:item.id,index};
-        if(pagePrompt([piece],request.page).length>limit)throw new Error('本批内容超过网页输入框预算，尚未发送。');
+        if(pagePrompt([piece],request.page).length>limit)throw new Error('本批内容超过翻译批次预算，尚未发送。');
         if(batch.length&&pagePrompt([...batch,piece],request.page).length>limit){batches.push(batch);batch=[];}
         batch.push(piece);
       }
@@ -115,7 +115,7 @@ var PaperPDFExport = (() => {
     registrations.set(key,pending);
     try{return await pending;}finally{registrations.delete(key);}
   }
-  async function run({attachment,win,ask,check,progress,budget=8000,destination}) {
+  async function run({attachment,win,ask,check,progress,budget=8000,destination,cacheNamespace}) {
     if(!attachment?.isPDFAttachment?.())throw new Error('请先打开要翻译的 PDF。');
     const input=await attachment.getFilePathAsync();if(!input||!await IOUtils.exists(input))throw new Error('原 PDF 文件不在本机，请先下载附件。');
     const env=await runtime();check();
@@ -125,7 +125,8 @@ var PaperPDFExport = (() => {
     if(!PathUtils.isAbsolute(destination)||canonical(input)===canonical(destination))throw new Error('请使用新的中文 PDF 文件名，不能覆盖原文。');
     if(!automatic&&await IOUtils.exists(destination))throw new Error('所选文件已存在，请换一个文件名，避免覆盖已有 PDF。');
     const data=PathUtils.join(Zotero.DataDirectory.dir,'paper-gpt','pdf-export');await IOUtils.makeDirectory(data,{ignoreExisting:true,createAncestors:true});
-    const hash=await IOUtils.computeHexDigest(input,'sha256'),cache=PathUtils.join(data,'cache',hash);
+    if(cacheNamespace&&!/^[A-Za-z0-9_-]{1,100}$/.test(cacheNamespace))throw Error('翻译缓存来源无效。');
+    const hash=await IOUtils.computeHexDigest(input,'sha256'),cache=cacheNamespace?PathUtils.join(data,'cache',hash,cacheNamespace):PathUtils.join(data,'cache',hash);
     const id=Services.uuid.generateUUID().toString().replace(/[{}]/g,''),job=PathUtils.join(data,'jobs',id);
     await IOUtils.makeDirectory(job,{ignoreExisting:true,createAncestors:true});
     // Keep native rendering paths short even for long paper names/data folders.

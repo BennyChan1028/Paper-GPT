@@ -1,7 +1,7 @@
 /* Independent implementation. No GPT PRO code or runtime bridge is used. */
 var PaperWebAssistant = (() => {
   const ID='paper-web-assistant@local.customization', PREF='extensions.paperWebAssistant.', HTML='http://www.w3.org/1999/xhtml';
-  const WEB_BUILD='20261103-dual-r25';
+  const WEB_BUILD='20261109-deepseek-r26';
   const panels=new Map(), injected=new Set(), readers=new Map(), workspaces=new Map();
   let chromeHandle, paneID, timer, commands=[], defaults=[], running=false, activeRun=null, uiCSS='', sessionSerial=0;
   const get=(k,d)=>{try{return Zotero.Prefs.get(PREF+k,true)??d;}catch(_){return d;}};
@@ -186,8 +186,8 @@ var PaperWebAssistant = (() => {
     const actions=el(s.doc,'div');actions.className='pwa-guide-actions';
     const dismiss=()=>{s.welcome.hidden=true;s.optionsButton?.focus();};
     if(step===0){
-      s.welcome.append(el(s.doc,'h3','登录 ChatGPT'),el(s.doc,'p','Paper GPT 使用 Zotero 内的 ChatGPT 网页。请先登录自己的账号；密码和验证码由你输入。外部浏览器的登录状态不一定会同步到这里。'),el(s.doc,'p','这一步用于论文问答、翻译、AI 标签和 AI 简记，无需填写 OpenAI API 密钥。'));
-      actions.append(action('打开登录网页',()=>{if(s.busy)throw new Error('请先等待当前任务完成。');navigateSession(s,'https://chatgpt.com/');dismiss();status(s,'登录完成后，打开设置 → 新手引导 / 基础配置，点击“我已登录，下一步”。');}),action('我已登录，下一步',()=>guide(s,1),true));
+      s.welcome.append(el(s.doc,'h3','登录 ChatGPT'),el(s.doc,'p','Paper GPT 使用 Zotero 内的 ChatGPT 网页。请先登录自己的账号；密码和验证码由你输入。外部浏览器的登录状态不一定会同步到这里。'),el(s.doc,'p','这一步用于网页问答、选文翻译、AI 标签和简记。全文翻译请在设置 → DeepSeek 翻译 API 单独配置。'));
+      actions.append(action('配置全文翻译 API',()=>{dismiss();s.options.hidden=false;s.translationSettings.open=true;s.translationSettings.scrollIntoView({block:'start'});}),action('打开登录网页',()=>{if(s.busy)throw new Error('请先等待当前任务完成。');navigateSession(s,'https://chatgpt.com/');dismiss();status(s,'登录完成后，打开设置 → 新手引导 / 基础配置，点击“我已登录，下一步”。');}),action('我已登录，下一步',()=>guide(s,1),true));
     }else if(step===1){
       s.welcome.append(el(s.doc,'h3','创建或选择 ChatGPT 项目'),el(s.doc,'p','在 ChatGPT 网页侧栏新建项目，建议命名为“论文阅读”；也可选择已有项目。Paper GPT 会把论文对话、文库助手和“AI 摘要”会话集中放在这个项目中。'),el(s.doc,'p','打开你自己的项目主页，复制页面地址并粘贴到下方。已有保存的链接会显示在这里；请勿填写单个聊天链接。'));
       const input=el(s.doc,'input');input.type='url';input.value=get('projectURL','');input.placeholder='https://chatgpt.com/g/g-p-…/project';
@@ -312,17 +312,21 @@ var PaperWebAssistant = (() => {
     const c=options.command||questionCommand(s,options.scope||s.scope.value)||commands[Number(s.command.value)];
     const currentReader=options.capture?.reader||reader();
     const target=currentReader?Zotero.Items.get(currentReader.itemID):items(s)[0];
-    bindItem(s,target,{sessionMode:generalCommand(c)?'general':'paper'});
+    const apiTranslation=['pdfTranslation','fullTranslation','pageTranslation'].includes(options.scope||c.scope);
+    s.apiTranslation=apiTranslation;
+    if(apiTranslation)pauseBackground(s);
+    bindItem(s,target,{sessionMode:generalCommand(c)?'general':'paper',prepare:!apiTranslation});
     const captured=snapshotCapture(options.capture||selection(currentReader,false)||(s.captured?.reader?.itemID===target?.id?s.captured:null));
     const q=options.question??s.question.value;
-    activeRun={s,cancelled:false};s.materialNotice='';s.taskItems=currentReader?[target].filter(Boolean):items(s);s.taskReader=currentReader;setBusy(s,true);
+    activeRun={s,cancelled:false,apiTranslation};s.materialNotice='';s.taskItems=currentReader?[target].filter(Boolean):items(s);s.taskReader=currentReader;setBusy(s,true);
     try{
       const translationScope=options.scope||c.scope;
       if(translationScope==='pdfTranslation'){
         if(options.draft)throw new Error('导出中文 PDF 需点击发送，译文将由本机排版引擎处理。');
         if(!currentReader)throw new Error('请先打开要翻译的 PDF。');
         const check=()=>{if(activeRun?.cancelled)throw new Error('任务已停止。');if(!currentReader._internalReader||s.sessionKey!==PaperSessions.key(target))throw new Error('PDF 已关闭或文献已切换，中文 PDF 导出已停止。');};
-        const result=await PaperPDFExport.run({attachment:target,win:s.win,budget:async()=>{await ensureSession(s);return inputBudget(s);},check,ask:text=>ask(s,text),progress:label=>{s.translationBatchLabel=label;status(s,label);}});
+        const transport=await PaperTranslationAPI.client({win:s.win,check,progress:label=>status(s,label)});
+        const result=await PaperPDFExport.run({attachment:target,win:s.win,budget:transport.budget,cacheNamespace:transport.identity,check,ask:text=>transport.ask(text),progress:label=>{s.translationBatchLabel=label;status(s,'DeepSeek API · '+label);}});
         if(result.cancelled){status(s,'已取消另存中文 PDF。');return;}
         s.lastPDFExport=result;s.result.replaceChildren();s.result.hidden=false;
         const parts=[result,result.dual].filter(Boolean);
@@ -366,7 +370,7 @@ var PaperWebAssistant = (() => {
       return answer;
     }catch(e){if(activeRun?.cancelled){status(s,['fullTranslation','pageTranslation'].includes(c.scope)?'已停止翻译，已保存 '+(s.fullTranslationProgress?.done||0)+' 段；未完成页面的旧批注保留。':'已停止。');return;}reportError(s,e);throw e;}
     finally{
-      await rememberSession(s).catch(()=>{});activeRun=null;setBusy(s,false);delete s.taskItems;delete s.taskReader;delete s.translationBatchLabel;
+      if(!apiTranslation)await rememberSession(s).catch(()=>{});activeRun=null;setBusy(s,false);delete s.taskItems;delete s.taskReader;delete s.translationBatchLabel;
       if('pendingItem' in s){const item=s.pendingItem;delete s.pendingItem;bindItem(s,item);}
     }
   }
@@ -429,23 +433,13 @@ var PaperWebAssistant = (() => {
       row.append(button,el(s.doc,'p',String(entry.summary||'')));s.result.append(row);
     }
   }
-  async function translationBatch(s,batch,check){
-    const answer=await ask(s,PaperParagraphs.prompt(batch));check();s.lastAnswer=answer;
+  async function translationBatch(s,batch,check,transport){
+    const answer=await transport.ask(PaperParagraphs.prompt(batch));check();s.lastAnswer=answer;
     s.translationReplyDiagnostic={expectedIDs:batch.map(p=>p.id),characters:answer.length,at:Date.now()};
     try{return PaperParagraphs.parse(answer,batch);}
     catch(e){
-      if(!['TRANSLATION_FORMAT','TRANSLATION_IDS'].includes(e.code))throw e;
-      s.translationReplyDiagnostic.code=e.code;s.translationReplyDiagnostic.recovery=true;
-      // Only completed, received but malformed replies enter this path. Errors
-      // from Draft/Send/Wait never trigger a replay of an uncertain submission.
-      const recovered=[];
-      for(const [i,p] of batch.entries()){
-        check();status(s,'返回格式异常，正在逐段自动恢复 '+(i+1)+'/'+batch.length+'…');
-        const marker=p.id+'-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10);
-        const retry=await ask(s,PaperParagraphs.recoveryPrompt(p,marker));check();s.lastAnswer=retry;
-        recovered.push(PaperParagraphs.parseRecovery(retry,p,marker));
-      }
-      s.translationReplyDiagnostic.recovered=true;return recovered;
+      s.translationReplyDiagnostic.code=e.code;
+      throw e;
     }
   }
   function currentPageIndex(r){
@@ -481,6 +475,7 @@ var PaperWebAssistant = (() => {
     const unreadable=[];let excludedCount=0,inReferences=false;
     let done=0,skipped=0,total=0,replaced=0;
     try{
+      const transport=await PaperTranslationAPI.client({win:s.win,check,progress:label=>status(s,label)});
       for(let pageIndex=first;pageIndex<last;pageIndex++){
         check();status(s,'正在读取 PDF 段落 · 第 '+(pageIndex+1)+'/'+pdf.numPages+' 页…');
         const data=await pdf.getPageData(Components.utils.cloneInto({pageIndex},win));check();
@@ -494,12 +489,12 @@ var PaperWebAssistant = (() => {
         const oldTranslations=pageOnly?existing.filter(a=>{try{return a.getTags().some(t=>t.tag===PaperParagraphs.tag)&&JSON.parse(a.annotationPosition).pageIndex===pageIndex;}catch(_){return false;}}):[];
         if(oldTranslations.some(a=>!a.isEditable()||a.annotationIsExternal))throw new Error('本页存在只读的 Paper GPT 译文批注，未替换。');
       s.fullTranslationProgress={total,done,skipped,unreadable,excludedCount};
-      await ensureSession(s);const budget=await inputBudget(s);check();
+      const budget=transport.budget;check();
       const batches=PaperParagraphs.batches(pending,budget),partial=new Map(),translated=[];
       for(const [batchIndex,batch] of batches.entries()){
         s.translationBatchLabel='第 '+(batch[0].annotation.position.pageIndex+1)+' 页 · 批次 '+(batchIndex+1)+'/'+batches.length;
         check();status(s,label+' · '+s.translationBatchLabel+' · 已保存 '+done+' 段'+(skipped?' · 跳过已完成 '+skipped+' 段':''));
-        const rows=await translationBatch(s,batch,check);
+        const rows=await translationBatch(s,batch,check,transport);
         for(const row of rows){
           check();const piece=row.paragraph,parent=piece.parent||piece;let translation=row.translation;
           if(piece.parent){
@@ -622,6 +617,7 @@ var PaperWebAssistant = (() => {
   }
   function commandInfo(s){
     const c=questionCommand(s,s.scope.value)||commands[Number(s.command.value)];if(!c)return;
+    s.apiTranslation=['pdfTranslation','fullTranslation','pageTranslation'].includes(s.scope.value);if(s.apiTranslation)pauseBackground(s);
     const info=PaperHelp.info(c),source=PaperHelp.sourceNames[s.scope.value]||s.scope.value;
     s.command.title=info.label+'：'+info.description+'\n'+info.usage;
     if(s.commandToggle){s.commandToggle.textContent=info.label;s.commandToggle.title=s.command.title;s.commandToggle.setAttribute('aria-label','快捷指令：'+info.label);}
@@ -752,7 +748,7 @@ var PaperWebAssistant = (() => {
     return String(text||'').replace(/^(?:学术翻译|译文|翻译结果|Translation)\s*[:：]?\s*\r?\n\s*/i,'');
   }
   function generalCommand(command){return ['📚Literature Review','文献对比矩阵','文献鸟瞰（Canvas）'].includes(command?.name);}
-  function bindItem(s,item,{sessionMode=s.sessionMode||'paper'}={}){
+  function bindItem(s,item,{sessionMode=s.sessionMode||'paper',prepare=true}={}){
     if(s.busy){s.pendingItem=item;return;}
     s.sessionMode=sessionMode;
     const key=sessionMode==='general'?PaperSessions.generalKey:PaperSessions.key(item)||(s.workspace?'workspace.'+(PaperZoteroCompat.libraryIDs().sort().join('.')||Zotero.Libraries.userLibraryID):null);
@@ -767,6 +763,7 @@ var PaperWebAssistant = (() => {
     s.captured=null;s.quotes=[];s.lastAnswer='';s.lastTarget=null;s.lastCapture=null;s.lastCommand=null;s.agentLog=[];
     if(s.result){s.result.hidden=true;s.result.replaceChildren();}
     sessionLabel(s);s.labelTitle=s.sessionTitle;
+    if(!prepare)return;
     // Connector imports can initialize collapsed item sections. Their web page
     // belongs to an explicit panel opening, not to a metadata selection change.
     if(s.busy||(panelVisible(s)&&reader()?.itemID===item?.id))navigateSession(s,PaperSessions.project);
@@ -849,7 +846,7 @@ var PaperWebAssistant = (() => {
     if(PaperSessions.remember(get,put,s,state))sessionLabel(s);
   }
   function scheduleSessionPreparation(s){
-    if(!PaperSessions.project||!running||!panelVisible(s)||!s.sessionKey||s.sessionMode==='general'||s.backgroundTimer||s.backgroundCheck||s.backgroundAttempt===s.sessionToken||s.ensuringSession||activeRun||s.busy)return;
+    if(s.apiTranslation||!PaperSessions.project||!running||!panelVisible(s)||!s.sessionKey||s.sessionMode==='general'||s.backgroundTimer||s.backgroundCheck||s.backgroundAttempt===s.sessionToken||s.ensuringSession||activeRun||s.busy)return;
     // Background preparation belongs to the active PDF, never a library import.
     const current=reader();if(!current||s.item?.id!==current.itemID)return;
     if([...panels.values()].some(p=>p!==s&&(p.backgroundTimer||p.backgroundCheck)))return;
@@ -990,6 +987,26 @@ var PaperWebAssistant = (() => {
     if(s.sendButton){s.sendButton.textContent=busy?'处理中…':'发送';s.sendButton.hidden=busy&&activeRun?.s===s;}
     if(s.commandToggle)s.commandToggle.disabled=busy||s.mode.value==='agent';
   }
+  function mountTranslationSettings(s,control,field,button,select){
+    const box=el(s.doc,'details');box.className='pwa-details';box.dataset.translationSettings='true';
+    box.append(el(s.doc,'summary','DeepSeek 翻译 API'));
+    box.append(el(s.doc,'p','翻译本页、全文译文批注、中文及双语 PDF 使用 DeepSeek API。按 API 用量计费，无需登录 ChatGPT 或关联会话。'));
+    const key=el(s.doc,'input');key.type='password';key.autocomplete='off';key.spellcheck=false;
+    key.placeholder='粘贴 API Key；留空保留已有密钥';field(box,'DeepSeek API Key',key);s.lockControls.push(key);
+    const model=field(box,'翻译模型',select([['deepseek-flash','DeepSeek Flash'],['deepseek-v4-pro','DeepSeek V4 Pro']]));
+    const info=el(s.doc,'p');info.setAttribute('role','status');info.setAttribute('aria-live','polite');box.append(info);
+    const refresh=async()=>{const value=await PaperTranslationAPI.settings();model.value=value.model;info.textContent=value.configured?'已保存密钥（保存在本机 Zotero 密码管理器中）。':'尚未配置。请保存密钥后测试连接。';};
+    const actions=el(s.doc,'div');actions.className='pwa-tool-grid';box.append(actions);
+    button(actions,'保存 API 设置',async()=>{await PaperTranslationAPI.save({key:key.value,model:model.value});key.value='';await refresh();});
+    button(actions,'测试连接',async()=>{
+      if(key.value.trim())throw Error('请先点击“保存 API 设置”，再测试连接。');
+      info.textContent='正在测试 DeepSeek API…';
+      try{const value=await PaperTranslationAPI.test({win:s.win});info.textContent='连接成功 · '+value+'。';}catch(e){info.textContent=e.message;throw e;}
+    });
+    button(actions,'清除已存密钥',async()=>{await PaperTranslationAPI.clear();key.value='';await refresh();});
+    box.append(el(s.doc,'p','测试连接会产生少量 API 用量。密钥不会随源码或安装包分享；全文翻译失败时不回退到网页发送。'));
+    control.append(box);s.translationSettings=box;refresh().catch(()=>{info.textContent='无法读取本机密钥存储，请解锁 Zotero 密码管理器后重试。';});
+  }
   function mount({doc,body,item}) {
     item=panelItem(item);
     if(panels.has(body)){bindItem(panels.get(body),item);return;}
@@ -1008,6 +1025,7 @@ var PaperWebAssistant = (() => {
     const field=(parent,label,input)=>{const box=el(doc,'label');box.className='pwa-field';input.setAttribute('aria-label',label);box.append(el(doc,'span',label),input);parent.append(box);return input;};
     const select=(entries)=>{const e=el(doc,'select');for(const [v,t]of entries){const o=el(doc,'option',t);o.value=v;e.append(o);}s.lockControls.push(e);return e;};
     const button=(parent,name,fn,locked=true)=>{const b=el(doc,'button',name);b.type='button';b.addEventListener('click',()=>Promise.resolve().then(fn).catch(e=>reportError(s,e)));parent.append(b);if(locked)s.lockControls.push(b);return b;};
+    mountTranslationSettings(s,control,field,button,select);
     s.mode=select([['ask','阅读问答'],['knowledge','知识库'],['agent','Agent']]);s.mode.hidden=true;control.append(s.mode);
     const tabs=el(doc,'div');tabs.className='pwa-modes';tabs.setAttribute('role','group');tabs.setAttribute('aria-label','助手模式');control.append(tabs);
     s.modeButtons=[];
@@ -1036,7 +1054,7 @@ var PaperWebAssistant = (() => {
     s.sendButton=button(bar,'发送',()=>{toggleOptions(s,true);s.help.hidden=true;s.helpButton.setAttribute('aria-expanded','false');return run(s,{scope:s.scope.value});});s.sendButton.className='pwa-primary';s.sendButton.title='执行所选指令（Ctrl+Enter）';
     button(bar,'跟进',async()=>{await ensureSession(s);s.browser.focus?.();const result=await query(s,'FocusComposer');if(!result.focused)throw new Error('网页输入框尚未就绪，请等待加载后重试。');status(s,'请直接在 ChatGPT 网页输入框补充问题，沿用当前会话。');}).title='在当前会话的网页输入框继续提问';
     button(bar,'填入',()=>{if(['fullTranslation','pageTranslation'].includes(s.scope.value))throw new Error('逐段翻译并写入标注需点击发送。');return run(s,{draft:true,scope:s.scope.value});}).title='把内容填入网页，暂不发送';
-    s.stopButton=button(bar,'停止',async()=>{if(activeRun){activeRun.cancelled=true;await query(activeRun.s,'Cancel');status(s,'已停止。');}},false);s.stopButton.disabled=true;s.stopButton.hidden=true;
+    s.stopButton=button(bar,'停止',async()=>{if(activeRun){activeRun.cancelled=true;if(activeRun.apiTranslation)PaperTranslationAPI.cancel();else await query(activeRun.s,'Cancel');status(s,'已停止。');}},false);s.stopButton.disabled=true;s.stopButton.hidden=true;
     s.helpButton=button(bar,'说明',()=>showHelp(s),false);s.helpButton.className='pwa-help-button';s.helpButton.dataset.uiToggle='true';s.helpButton.setAttribute('aria-expanded','false');
     if(typeof PaperLibraryTools!=='undefined'){
       s.libraryButton=button(control,'期刊与阅读工具',()=>s.library?.hidden?s.openLibrary():PaperLibraryUI.close(s,true),false);s.libraryButton.dataset.uiToggle='true';s.libraryButton.setAttribute('aria-expanded','false');s.libraryButton.title='期刊评级、阅读记录、AI 标签与简记';
@@ -1162,8 +1180,8 @@ var PaperWebAssistant = (() => {
     if(!s||s.disposed)return;
     s.disposed=true;s.sessionToken=null;
     if(s.backgroundTimer){s.win.clearTimeout(s.backgroundTimer);delete s.backgroundTimer;}
-    if(activeRun?.s===s)activeRun.cancelled=true;
-    try{s.browser?.browsingContext?.currentWindowGlobal?.getActor('PaperWeb')?.sendQuery('PaperWeb:Cancel').catch(()=>{});}catch(_){}
+    if(activeRun?.s===s){activeRun.cancelled=true;if(activeRun.apiTranslation)PaperTranslationAPI.cancel();}
+    if(!s.apiTranslation)try{s.browser?.browsingContext?.currentWindowGlobal?.getActor('PaperWeb')?.sendQuery('PaperWeb:Cancel').catch(()=>{});}catch(_){}
     try{s.libraryUnsubscribe?.();}catch(_){}s.libraryUnsubscribe=null;
     s.captured=null;s.lastCapture=null;s.taskItems=null;s.pendingItem=null;
     s.questionDrafts?.clear();s.quotes=[];s.agentLog=[];
@@ -1311,10 +1329,10 @@ var PaperWebAssistant = (() => {
       Zotero.Reader.registerEventListener('createAnnotationContextMenu',menuHook,ID);
       timer=Zotero.getMainWindow().setInterval(scan,500);scan();
     },
-    stop(){running=false;if(activeRun){activeRun.cancelled=true;try{actor(activeRun.s).sendQuery('PaperWeb:Cancel').catch(()=>{});}catch(_){}}if(timer)Zotero.getMainWindow()?.clearInterval(timer);timer=null;for(const s of [...panels.values()])disposePanel(s);for(const w of workspaces.keys())w.document.getElementById('zotero-layout-switcher')?.removeAttribute('data-paper-gpt-open');for(const n of injected)n.remove();injected.clear();workspaces.clear();Zotero.Reader._unregisterEventListenerByPluginID(ID);if(paneID)Zotero.ItemPaneManager.unregisterSection(paneID);panels.clear();try{ChromeUtils.unregisterWindowActor('PaperWeb');}catch(_){}chromeHandle?.destruct();},
+    stop(){running=false;if(activeRun){activeRun.cancelled=true;if(activeRun.apiTranslation)PaperTranslationAPI.cancel();else try{actor(activeRun.s).sendQuery('PaperWeb:Cancel').catch(()=>{});}catch(_){}}if(timer)Zotero.getMainWindow()?.clearInterval(timer);timer=null;for(const s of [...panels.values()])disposePanel(s);for(const w of workspaces.keys())w.document.getElementById('zotero-layout-switcher')?.removeAttribute('data-paper-gpt-open');for(const n of injected)n.remove();injected.clear();workspaces.clear();Zotero.Reader._unregisterEventListenerByPluginID(ID);if(paneID)Zotero.ItemPaneManager.unregisterSection(paneID);panels.clear();try{ChromeUtils.unregisterWindowActor('PaperWeb');}catch(_){}chromeHandle?.destruct();},
     show,run,selection,context,writeAnnotation,saveNote,locate,tool,
     get commands(){return commands;},
     get panels(){return [...panels.values()];},
-    diagnostics(){return {version:'1.6.18',webBuild:WEB_BUILD,compatibility:PaperZoteroCompat.diagnostics(),paneID,commands:commands.length,panels:[...panels.values()].map(s=>({visible:panelVisible(s),deferred:!!s.deferredURL,background:!!s.backgroundCheck,navigationCount:s.navigationCount||0,status:s.status.textContent,url:s.browser.currentURI?.spec})),busy:!!activeRun};}
+    diagnostics(){return {version:'1.6.19',webBuild:WEB_BUILD,compatibility:PaperZoteroCompat.diagnostics(),paneID,commands:commands.length,panels:[...panels.values()].map(s=>({visible:panelVisible(s),deferred:!!s.deferredURL,background:!!s.backgroundCheck,navigationCount:s.navigationCount||0,status:s.status.textContent,url:s.browser.currentURI?.spec})),busy:!!activeRun};}
   };
 })();

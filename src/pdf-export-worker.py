@@ -1,6 +1,6 @@
-"""Local BabelDOC adapter. Translation requests are handled by Zotero's web UI.
+"""Local BabelDOC adapter. Translation requests are handled by Zotero's API adapter.
 
-No translation API, browser cookies, account tokens or network listener are used.
+The worker receives no API keys, browser cookies or account tokens.
 BabelDOC is an independently installed AGPL-3.0 dependency; see THIRD_PARTY.md.
 """
 from pathlib import Path

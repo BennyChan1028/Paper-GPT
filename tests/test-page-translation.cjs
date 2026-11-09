@@ -14,11 +14,12 @@ ctx.Services={io:{newURI:spec=>({spec})},scriptSecurityManager:{getSystemPrincip
 const win={Zotero_Tabs:{selectedID:'pdf'},ZoteroPane:{getSelectedItems:()=>[item]}};
 ctx.Zotero={Prefs:{get:k=>prefs.get(k),set:(k,v)=>prefs.set(k,v)},getMainWindow:()=>win,Reader:{getByTabID:()=>reader},Items:{get:()=>item,getByLibraryAndKey:(_,key)=>records.find(a=>a.key===key)},DataObjectUtilities:{generateKey:()=> 'K'+(++next)},Promise:{delay:ms=>ms>=15000?new Promise(()=>{}):Promise.resolve()},DB:{executeTransaction:async fn=>{const snapshot=records.slice();try{return await fn()}catch(e){records.splice(0,records.length,...snapshot);throw e}}},Annotations:{saveFromJSON:async(_,a)=>{if(failWrite)throw Error('database write failed');const row=annotation(a.position.pageIndex,a.text);row.key=a.key;row.annotationPosition=JSON.stringify(a.position);row.annotationComment=a.comment;events.push('write:'+a.position.pageIndex);return row;}}};
 ctx.Zotero.Item=class{async loadPrimaryData(){}setTags(tags){this.tags=tags}async save(){return ctx.Zotero.Annotations.saveFromJSON(item,{key:this.key,text:this.annotationText,comment:this.annotationComment,position:JSON.parse(this.annotationPosition),tags:this.tags});}};
+ctx.PaperTranslationAPI={client:async()=>({budget:8000,ask:async prompt=>{events.push('send');requests.push(prompt);afterSend?.();if(badReply)return 'malformed answer';const batch=JSON.parse(prompt.split('\n').at(-1));return JSON.stringify({translations:batch.map(p=>({id:p.id,translation:'中文译文：'+p.text}))});}})};
 vm.runInContext(fs.readFileSync(base+'assistant.js','utf8'),ctx);const api=ctx.PaperWebAssistant,build=api.diagnostics; // build comes from source without starting UI
 const version=fs.readFileSync(base+'assistant.js','utf8').match(/const WEB_BUILD='([^']+)'/)[1];
 function panel(){const s={busy:false,lockControls:[],mode:{value:'ask'},scope:{value:'pageTranslation'},write:{value:'answer'},command:{value:'0'},question:{value:''},status:{textContent:''}};
  sessions.associate((k,v)=>prefs.set('extensions.paperWebAssistant.'+k,v),sessions.key(item),chat);
- s.browser={currentURI:{spec:'about:blank',host:'chatgpt.com'},loadURI:u=>s.browser.currentURI.spec=u.spec,browsingContext:{currentWindowGlobal:{getActor:()=>({sendQuery:async(name,data)=>{
+ s.browser={currentURI:{spec:'about:blank',host:'chatgpt.com'},loadURI:u=>s.browser.currentURI.spec=u.spec,browsingContext:{currentWindowGlobal:{getActor:()=>({sendQuery:async(name,data)=>{throw Error('translation must never access webpage: '+name);
   if(name==='PaperWeb:ProjectState')return {actorBuild:version,url:s.browser.currentURI.spec,access:'ok',loaded:true,ready:true};
   if(name==='PaperWeb:VerifyProjectConversation')return {actorBuild:version,project:home,pageURL:home,status:'found',url:chat,complete:true};
   if(name==='PaperWeb:RenameConversation')return {renamed:true};
@@ -41,6 +42,11 @@ async function main(){
  const page2=records.filter(a=>a.getTags().length&&JSON.parse(a.annotationPosition).pageIndex===1);await page2[0].erase();requests.length=0;await api.run(s,{command:fullCommand});assert.equal(records.length,n,'partial page fills only the missing paragraph');assert.equal(requests.length,1);assert(records.includes(manual));
  const empty=pages[1];pages[1]={chars:[]};app.page=2;const snapshot=records.map(a=>a.id);await assert.rejects(api.run(s,{command:pageCommand}),/OCR/);assert.deepEqual(records.map(a=>a.id),snapshot);pages[1]=empty;
  reader._internalReader._lastView={_iframeWindow:{PDFViewerApplication:{page:3,pdfDocument:pdf}}};reads=[];await api.run(s,{command:pageCommand});assert.deepEqual(reads,[2],'split-view active page is used');
+ let pdfRuns=0;ctx.PaperTranslationAPI.client=async()=>({budget:8000,identity:'deepseek-deepseek-flash',ask:async()=>'{"translations":[]}'});
+ ctx.PaperPDFExport={run:async opts=>{pdfRuns++;assert.equal(opts.budget,8000);assert.equal(opts.cacheNamespace,'deepseek-deepseek-flash');assert.equal(await opts.ask('test'),'{"translations":[]}');return {cancelled:true};}};
+ await api.run(s,{command:{name:'全文翻译为 PDF',scope:'pdfTranslation'}});assert.equal(pdfRuns,1,'PDF export uses API adapter without any webpage query');
+ ctx.PaperTranslationAPI.client=async()=>{throw Error('API key missing');};
+ await assert.rejects(api.run(s,{command:{name:'全文翻译为 PDF',scope:'pdfTranslation'}}),/API key missing/);assert.equal(pdfRuns,1,'missing key cannot start rendering or fall back to web');
  assert.equal(JSON.parse(fs.readFileSync(base+'commands.json')).find(c=>c.name==='翻译本页').scope,'pageTranslation');
  console.log('PASS current-page coordinates, frozen active page, bounded batches, atomic AI-only replacement, manual/other-page preservation, response/write failure rollback, full-document page order, completion/partial resume, OCR guard and active split view');
 }
