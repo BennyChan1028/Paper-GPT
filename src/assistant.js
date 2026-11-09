@@ -1,7 +1,7 @@
 /* Independent implementation. No GPT PRO code or runtime bridge is used. */
 var PaperWebAssistant = (() => {
   const ID='paper-web-assistant@local.customization', PREF='extensions.paperWebAssistant.', HTML='http://www.w3.org/1999/xhtml';
-  const WEB_BUILD='20261109-api-ids-r27';
+  const WEB_BUILD='20261109-models-r28';
   const panels=new Map(), injected=new Set(), readers=new Map(), workspaces=new Map();
   let chromeHandle, paneID, timer, commands=[], defaults=[], running=false, activeRun=null, uiCSS='', sessionSerial=0;
   const get=(k,d)=>{try{return Zotero.Prefs.get(PREF+k,true)??d;}catch(_){return d;}};
@@ -993,13 +993,23 @@ var PaperWebAssistant = (() => {
     box.append(el(s.doc,'p','翻译本页、全文译文批注、中文及双语 PDF 使用 DeepSeek API。按 API 用量计费，无需登录 ChatGPT 或关联会话。'));
     const key=el(s.doc,'input');key.type='password';key.autocomplete='off';key.spellcheck=false;
     key.placeholder='粘贴 API Key；留空保留已有密钥';field(box,'DeepSeek API Key',key);s.lockControls.push(key);
-    const model=field(box,'翻译模型',select([['deepseek-flash','DeepSeek Flash'],['deepseek-v4-pro','DeepSeek V4 Pro']]));
+    const model=field(box,'翻译模型',select([]));model.dataset.translationModel='true';
     const info=el(s.doc,'p');info.setAttribute('role','status');info.setAttribute('aria-live','polite');box.append(info);
-    const refresh=async()=>{const value=await PaperTranslationAPI.settings();model.value=value.model;info.textContent=value.configured?'已保存密钥（保存在本机 Zotero 密码管理器中）。':'尚未配置。请保存密钥后测试连接。';};
+    const populate=(rows,chosen)=>{model.replaceChildren();for(const row of rows){const option=el(s.doc,'option',row.name===row.id?row.id:row.name+' · '+row.id);option.value=row.id;model.append(option);}if(!rows.some(r=>r.id===chosen)){const old=el(s.doc,'option',chosen+'（已保存，当前列表未包含）');old.value=chosen;model.prepend(old);}model.value=chosen;};
+    const refresh=async()=>{const value=await PaperTranslationAPI.settings();populate(value.models,value.model);info.textContent=value.configured?'当前生效模型：'+value.model+'。'+(value.source==='api'?'已载入上次获取的模型列表。':'可点击“获取模型列表”读取 API 可用模型。'):'尚未配置。请先保存密钥，再获取模型列表。';};
+    model.addEventListener('change',()=>{info.textContent='已选择 '+model.value+'；点击“保存 API 设置”后生效。';});
     const actions=el(s.doc,'div');actions.className='pwa-tool-grid';box.append(actions);
     button(actions,'保存 API 设置',async()=>{await PaperTranslationAPI.save({key:key.value,model:model.value});key.value='';await refresh();});
+    const fetchModels=button(actions,'获取模型列表',async()=>{
+      if(key.value.trim())throw Error('请先保存新填写的 API Key，再获取模型列表。');
+      if(fetchModels.disabled)return;fetchModels.disabled=true;info.textContent='正在获取 DeepSeek 模型列表…';
+      try{const rows=await PaperTranslationAPI.listModels({win:s.win});populate(rows,model.value);const saved=await PaperTranslationAPI.settings();info.textContent='已获取 '+rows.length+' 个文字模型。当前生效：'+saved.model+'；选择后点击“保存 API 设置”。';}
+      catch(e){info.textContent=e.message;throw e;}finally{fetchModels.disabled=!!s.busy;}
+    });
+    fetchModels.dataset.fetchModels='true';
     button(actions,'测试连接',async()=>{
       if(key.value.trim())throw Error('请先点击“保存 API 设置”，再测试连接。');
+      if((await PaperTranslationAPI.settings()).model!==model.value)throw Error('请先保存所选模型，再测试连接。');
       info.textContent='正在测试 DeepSeek API…';
       try{const value=await PaperTranslationAPI.test({win:s.win});info.textContent='连接成功 · '+value+'。';}catch(e){info.textContent=e.message;throw e;}
     });
@@ -1333,6 +1343,6 @@ var PaperWebAssistant = (() => {
     show,run,selection,context,writeAnnotation,saveNote,locate,tool,
     get commands(){return commands;},
     get panels(){return [...panels.values()];},
-    diagnostics(){return {version:'1.6.20',webBuild:WEB_BUILD,compatibility:PaperZoteroCompat.diagnostics(),paneID,commands:commands.length,panels:[...panels.values()].map(s=>({visible:panelVisible(s),deferred:!!s.deferredURL,background:!!s.backgroundCheck,navigationCount:s.navigationCount||0,status:s.status.textContent,url:s.browser.currentURI?.spec})),busy:!!activeRun};}
+    diagnostics(){return {version:'1.6.21',webBuild:WEB_BUILD,compatibility:PaperZoteroCompat.diagnostics(),paneID,commands:commands.length,panels:[...panels.values()].map(s=>({visible:panelVisible(s),deferred:!!s.deferredURL,background:!!s.backgroundCheck,navigationCount:s.navigationCount||0,status:s.status.textContent,url:s.browser.currentURI?.spec})),busy:!!activeRun};}
   };
 })();
